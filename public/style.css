@@ -40,8 +40,10 @@ img { max-width: 100%; height: auto; }
   border-bottom: 1px solid var(--rule);
 }
 .portrait-link { display: block; line-height: 0; }
+/* Portrait and answer are capped by viewport HEIGHT too (svh), so the portrait + NO + countdown + banner all fit
+   the first viewport on laptop screens (1280x720 / 1366x768 / 1440x800), not just on tall windows. */
 .portrait {
-  width: clamp(120px, 24vw, 220px);
+  width: clamp(120px, min(24vw, 22svh), 220px);
   height: auto;
   aspect-ratio: 4 / 5;
   object-fit: cover;
@@ -51,14 +53,14 @@ img { max-width: 100%; height: auto; }
 .answer {
   font-family: var(--serif);
   font-weight: 700;
-  font-size: clamp(9rem, 42vw, 30rem);
+  font-size: clamp(6rem, min(42vw, 48svh), 30rem);
   line-height: 0.9;
   letter-spacing: -0.04em;
   margin: 0.05em 0 0;
   max-width: 100%;
   overflow-wrap: normal;
 }
-.answer-yes .answer { letter-spacing: -0.06em; font-size: clamp(7rem, 30vw, 20rem); }
+.answer-yes .answer { letter-spacing: -0.06em; font-size: clamp(5rem, min(30vw, 48svh), 20rem); }
 .days {
   font-family: var(--mono);
   font-size: clamp(1rem, 2.2vw, 1.25rem);
@@ -138,11 +140,12 @@ footer a { color: inherit; }
 
 @media (max-width: 600px) {
   body { font-size: 14px; }
-  .answer { font-size: clamp(6rem, 46vw, 12rem); }
-  .answer-yes .answer { font-size: clamp(5rem, 27vw, 10rem); }
+  .answer { font-size: clamp(6rem, min(46vw, 48svh), 12rem); }
+  .answer-yes .answer { font-size: clamp(5rem, min(27vw, 48svh), 10rem); }
   tbody th { width: 50%; }
   td.vol, thead th:nth-child(4) { display: none; }
   td.num, th.num { padding-right: 10px; }
+  .vp { display: none; }              /* merged 2028 rows: the Yes column already shows the mean */
   .news a { font-size: 0.98rem; }
 }
 @media (prefers-reduced-motion: no-preference) {

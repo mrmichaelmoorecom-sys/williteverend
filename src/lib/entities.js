@@ -37,3 +37,9 @@ export function escapeRe(s) {
 export function stripTags(s) {
   return decodeEntities(String(s ?? '').replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
 }
+
+/** Only http(s) URLs may become hrefs. Returns the trimmed URL or '' (rejects javascript:, data:, relative, etc.). */
+export function safeHttpUrl(u) {
+  const s = String(u ?? '').trim();
+  return /^https?:\/\/[^\s"'<>]+$/i.test(s) ? s : '';
+}

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket } from '../src/lib/markets.js';
-import { computeEnds, computeEarly, computeVerdict, computeApproval, buildSnapshot, buildGroups, venueMean, K, PM } from '../src/lib/snapshot.js';
+import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket, parseKalshi2028, parsePolymarket2028 } from '../src/lib/markets.js';
+import { computeEnds, computeEarly, computeVerdict, computeApproval, buildSnapshot, buildGroups, venueMean, mergeElection2028, K, PM } from '../src/lib/snapshot.js';
 
 const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'));
 const NOW = Date.parse('2026-09-22T06:30:00Z');
@@ -154,6 +154,24 @@ test('buildSnapshot: full shape, source flags, carry-forward of a failed source'
   assert.equal(snap2.sources.kalshi.ok, false);
   assert.equal(snap2.sources.kalshi.error, 'HTTP 503');
   assert.equal(snap2.sources.kalshi.at, '2026-09-22T06:29:00Z');
+  assert.equal(snap2.stale, false);                                  // Polymarket was fresh
+  assert.equal(snap2.updatedAt, new Date(NOW + 600e3).toISOString());
+  // BOTH venues down: serve the last-good snapshot with ITS updatedAt (§1.6), flagged stale
+  const snap5 = buildSnapshot({ now: NOW + 6 * 3600e3, config, prev: snap,
+    kalshi: { ok: false, markets: snap.markets.kalshi, at: snap.sources.kalshi.at, error: 'x' },
+    polymarket: { ok: false, markets: snap.markets.polymarket, at: snap.sources.polymarket.at, error: 'y' } });
+  assert.equal(snap5.updatedAt, snap.updatedAt);
+  assert.equal(snap5.stale, true);
+  assert.equal(snap5.ends.pct, 89.6);
+  // successive failing runs keep chaining back to the last real fetch
+  const snap6 = buildSnapshot({ now: NOW + 12 * 3600e3, config, prev: snap5, kalshi: { ok: false, markets: snap5.markets.kalshi }, polymarket: { ok: false, markets: snap5.markets.polymarket } });
+  assert.equal(snap6.updatedAt, snap.updatedAt);
+  // partial: a 200 that omitted some expected markets
+  const snap7 = buildSnapshot({ now: NOW, config, kalshi: { ok: true, markets: l.kalshi, at: 'x', partial: true, missing: ['KXTRUMPPRES-28'] }, polymarket: { ok: true, markets: l.polymarket } });
+  assert.deepEqual(snap7.sources.kalshi.missing, ['KXTRUMPPRES-28']);
+  assert.equal(snap7.sources.kalshi.partial, true);
+  assert.equal(snap7.sources.polymarket.partial, false);
+  assert.deepEqual(snap7.sources.polymarket.missing, []);
   // config override wins
   const snap3 = buildSnapshot({ now: NOW, config: { ...config, override: 'YES' }, kvOverride: 'NO', kalshi: { ok: true, markets: l.kalshi }, polymarket: { ok: true, markets: l.polymarket } });
   assert.equal(snap3.verdict, 'YES');
@@ -162,4 +180,43 @@ test('buildSnapshot: full shape, source flags, carry-forward of a failed source'
   // nothing at all: still a NO with a countdown and null headline
   const bare = buildSnapshot({ now: NOW, config });
   assert.equal(bare.verdict, 'NO'); assert.equal(bare.ends.pct, null); assert.equal(bare.daysLeft, 851);
+  assert.equal(bare.stale, true);
+  assert.equal(bare.updatedAt, new Date(NOW).toISOString());   // no prev to chain to
+});
+
+test('mergeElection2028: one row per person across venues, mean price, per-venue detail, top N', () => {
+  const kr = (label, prob, extra = {}) => ({ label, prob, venue: 'Kalshi', thin: false, id: 'K-' + label, link: 'https://kalshi.com/k', volume: 100, ...extra });
+  const pr = (label, prob, extra = {}) => ({ label, prob, venue: 'Polymarket', thin: false, id: 'p-' + label, link: 'https://polymarket.com/p', volume: 50, ...extra });
+  const rows = mergeElection2028(
+    [kr('J.D. Vance', 0.215), kr('Ron DeSantis', 0.02), kr('Gavin Newsom', 0.075)],
+    [pr('JD Vance', 0.2065), pr('Josh Shapiro', 0.03), pr('Gavin Newsom', 0.5, { thin: true })],
+  );
+  assert.deepEqual(rows.map((r) => r.label), ['J.D. Vance', 'Gavin Newsom', 'Josh Shapiro', 'Ron DeSantis']);
+  const vance = rows[0];
+  assert.equal(vance.prob, 0.2108);                                  // mean(0.215, 0.2065) = 0.21075
+  assert.equal(vance.pct, 21.1);
+  assert.deepEqual(Object.keys(vance.byVenue), ['Kalshi', 'Polymarket']);
+  assert.equal(vance.byVenue.Polymarket.pct, 20.7);
+  assert.equal(vance.byVenue.Kalshi.link, 'https://kalshi.com/k');
+  assert.equal(vance.volume, 150);
+  assert.equal(vance.venue, 'Kalshi + Polymarket');
+  // thin Polymarket leg is excluded from the mean (§1.6 gating) but still listed
+  const newsom = rows[1];
+  assert.equal(newsom.prob, 0.075); assert.deepEqual(newsom.venues, ['Kalshi']); assert.equal(newsom.byVenue.Polymarket.thin, true);
+  const shapiro = rows[2];
+  assert.equal(shapiro.venue, 'Polymarket'); assert.deepEqual(Object.keys(shapiro.byVenue), ['Polymarket']);
+  assert.equal(mergeElection2028([kr('A', 0.1), kr('B', 0.2), kr('C', 0.3)], null, 2).length, 2);
+  assert.deepEqual(mergeElection2028(null, null), []);
+});
+
+test('buildGroups merges the live 2028 fixtures: no person twice, party rows still appended', () => {
+  const e = { kalshi: parseKalshi2028(fx('k2028.json'), 8), polymarket: parsePolymarket2028(fx('pm_ev2028.json'), 8) };
+  const g = buildGroups({ ...live(), election2028: e });
+  const people = g.election2028.filter((r) => r.byVenue);
+  const keys = people.map((r) => r.label.toLowerCase().replace(/[^a-z]/g, ''));
+  assert.equal(new Set(keys).size, keys.length);
+  assert.ok(people.length <= 8 && people.length >= 5);
+  assert.ok(people.some((r) => Object.keys(r.byVenue).length === 2), 'at least one person priced on both venues');
+  assert.equal(g.election2028.at(-2).id, K.PARTY_D);
+  assert.equal(g.election2028.at(-1).id, K.PARTY_R);
 });

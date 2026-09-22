@@ -39,6 +39,9 @@ export function parseKalshiBatch(json) {
   if (!markets) throw new Error('Kalshi: no markets[]');
   const out = {};
   for (const m of markets) if (m && m.ticker) out[m.ticker] = kalshiRow(m);
+  // A batch of known tickers can never legitimately be empty (settled markets still come back as finalized);
+  // an empty 200 (ticker re-series, partial outage) must NOT count as success or it wipes the last-good map.
+  if (!Object.keys(out).length) throw new Error('Kalshi: 0 markets returned');
   return out;
 }
 
@@ -79,6 +82,7 @@ export function parsePolymarketKeyset(json) {
   if (!events) throw new Error('Polymarket: no events[]');
   const out = {};
   for (const e of events) for (const m of e.markets || []) if (m && m.slug) out[m.slug] = polymarketRow(m, e.slug);
+  if (!Object.keys(out).length) throw new Error('Polymarket: 0 markets returned');   // {events:[]} is a 200 for unknown slugs
   return out;
 }
 
@@ -100,6 +104,7 @@ export function parsePolymarket2028(json, top = 8) {
     .map((m) => ({ ...polymarketRow(m, e.slug), label: m.groupItemTitle || m.question }))
     .filter((r) => r.prob != null)
     .sort((a, b) => b.prob - a.prob);
+  if (!rows.length) throw new Error('Polymarket 2028: 0 priced markets');
   return rows.slice(0, top);
 }
 
@@ -107,10 +112,11 @@ export function parsePolymarket2028(json, top = 8) {
 export function parseKalshi2028(json, top = 8) {
   const markets = json && Array.isArray(json.markets) ? json.markets : null;
   if (!markets) throw new Error('Kalshi 2028: no markets');
-  return markets.map((m) => ({ ...kalshiRow(m), label: m.yes_sub_title || m.title }))
+  const rows = markets.map((m) => ({ ...kalshiRow(m), label: m.yes_sub_title || m.title }))
     .filter((r) => r.prob != null)
-    .sort((a, b) => b.prob - a.prob)
-    .slice(0, top);
+    .sort((a, b) => b.prob - a.prob);
+  if (!rows.length) throw new Error('Kalshi 2028: 0 markets returned');
+  return rows.slice(0, top);
 }
 
 /**

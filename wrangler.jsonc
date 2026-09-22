@@ -9,7 +9,7 @@
     "not_found_handling": "none",
     "run_worker_first": ["/", "/index.html", "/api/*"]
   },
-  "triggers": { "crons": ["*/10 * * * *", "5 * * * *"] },
+  "triggers": { "crons": ["*/10 * * * *"] },   // every tick: markets + ONE due heavy job (see src/lib/schedule.js); stays under the 10 ms Free-plan CPU cap
   "kv_namespaces": [{ "binding": "STATE", "id": "701133a398414aaa81b191a2660ac351" }],
   "observability": { "enabled": true }
 }

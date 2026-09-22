@@ -43,6 +43,28 @@
     }
   }
 
+  // Same public copy as render.js endedLabel(); never prints the raw reason.
+  function endedLabel(reason) {
+    reason = String(reason || '');
+    if (/term ended on schedule/.test(reason)) return 'The term ended on schedule.';
+    if (/^Kalshi .* settled YES$/.test(reason)) return 'Kalshi\u2019s "leaves office" market settled YES.';
+    if (/^Polymarket .* resolved YES$/.test(reason)) return 'Polymarket\u2019s "out as President" market resolved YES.';
+    return 'Marked as ended.';
+  }
+  // Once the answer is YES the "chance it ends" lines are moot: remove them and show why it ended (idempotent).
+  function renderEndedBanner(s) {
+    var banner = document.getElementById('banner'); if (!banner) return;
+    var old = banner.querySelectorAll('.chance:not(.ended), .expect');
+    for (var i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+    if (!banner.querySelector('.chance.ended')) {
+      var p = document.createElement('p'); p.className = 'chance ended';
+      var k = document.createElement('span'); k.className = 'k'; k.textContent = endedLabel(s.verdictReason);
+      p.appendChild(k);
+      var details = banner.querySelector('details');
+      if (details) banner.insertBefore(p, details); else banner.appendChild(p);
+    }
+  }
+
   function applyState(s) {
     if (!s || !s.verdict) return;
     state = s;
@@ -53,8 +75,12 @@
       document.body.className = 'answer-' + s.verdict.toLowerCase();
       document.title = 'Will it ever end? ' + s.verdict;
     }
-    var e = document.getElementById('ends-pct'); if (e && s.ends) e.textContent = pct(s.ends.pct);
-    var y = document.getElementById('early-pct'); if (y && s.early) y.textContent = pct(s.early.pct);
+    if (s.verdict === 'YES') {
+      renderEndedBanner(s);
+    } else {
+      var e = document.getElementById('ends-pct'); if (e && s.ends) e.textContent = pct(s.ends.pct);
+      var y = document.getElementById('early-pct'); if (y && s.early) y.textContent = pct(s.early.pct);
+    }
     var u = document.getElementById('updated'); if (u && s.updatedAt) { u.setAttribute('datetime', s.updatedAt); }
     renderCountdown(); renderTimes();
   }
@@ -63,7 +89,7 @@
     if (!window.fetch) return;
     fetch('/api/state', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
       if (!s) return;
-      applyState({ verdict: s.verdict, termEnd: s.termEnd, endedAt: s.endedAt, ends: s.ends, early: s.early, updatedAt: s.updatedAt });
+      applyState({ verdict: s.verdict, verdictReason: s.verdictReason, termEnd: s.termEnd, endedAt: s.endedAt, ends: s.ends, early: s.early, updatedAt: s.updatedAt, stale: s.stale });
     }).catch(function () { /* keep server-rendered values */ });
   }
 
@@ -71,11 +97,14 @@
   function mountEmbed(fig) {
     if (fig.dataset.mounted) return;
     fig.dataset.mounted = '1';
+    if (!/^https:\/\/embed\.polymarket\.com\//.test(fig.dataset.embed || '')) return;   // only the one allowed embed host
     var f = document.createElement('iframe');
     f.src = fig.dataset.embed;
     f.title = (fig.dataset.label || 'Polymarket') + ' — Polymarket embed';
     f.loading = 'lazy';
     f.setAttribute('referrerpolicy', 'no-referrer');
+    // allow-popups-to-escape-sandbox: every link inside the embed is target=_blank → polymarket.com and must open unsandboxed.
+    f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox');
     fig.appendChild(f);
   }
   function setupEmbeds() {

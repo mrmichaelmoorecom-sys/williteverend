@@ -132,6 +132,45 @@ function row(label, r, extra = {}) {
     link: r.link, embed: r.embed || null, endDate: r.endDate, status: r.status, closed: !!r.closed, ...extra };
 }
 
+const nameKey = (label) => String(label || '').toLowerCase().replace(/[^a-z]/g, '');
+
+/**
+ * Merge the Kalshi and Polymarket 2028-winner lists into one row per person, keyed by the letters of the
+ * name ("J.D. Vance" and "JD Vance" collide). Yes = venueMean of the venues that price that person
+ * (thin gating + cross-venue mean per §1.6); `byVenue` keeps each venue's own price/link for the Venue cell.
+ */
+export function mergeElection2028(kalshiRows, polymarketRows, top = 8) {
+  const people = new Map();
+  for (const [venue, list] of [['Kalshi', kalshiRows], ['Polymarket', polymarketRows]]) {
+    for (const r of list || []) {
+      if (!r || r.prob == null) continue;
+      const key = nameKey(r.label);
+      if (!key) continue;
+      const e = people.get(key) || { label: r.label, rows: [] };
+      if (venue === 'Kalshi') e.label = r.label;          // prefer Kalshi's yes_sub_title form
+      if (!e.rows.some((x) => x.venue === r.venue)) e.rows.push(r);
+      people.set(key, e);
+    }
+  }
+  const out = [];
+  for (const e of people.values()) {
+    const vm = venueMean(e.rows);
+    if (vm.value == null) continue;
+    const byVenue = {};
+    for (const r of e.rows) byVenue[r.venue] = { id: r.id, pct: pctOf(r.prob), prob: r.prob, link: r.link, volume: r.volume, thin: !!r.thin };
+    const vols = e.rows.map((r) => r.volume).filter((v) => Number.isFinite(v));
+    out.push({
+      label: e.label, id: e.rows.map((r) => r.id).join('|'),
+      venue: e.rows.length === 1 ? e.rows[0].venue : 'Kalshi + Polymarket', venues: vm.venues,
+      prob: r4(vm.value), pct: pctOf(vm.value), thin: vm.thin,
+      volume: vols.length ? vols.reduce((a, b) => a + b, 0) : null,
+      link: e.rows[0].link, embed: null, endDate: e.rows[0].endDate || null, closed: e.rows.every((r) => r.closed), byVenue,
+    });
+  }
+  out.sort((a, b) => b.prob - a.prob);
+  return out.slice(0, top);
+}
+
 /** Build the display groups from the market maps. */
 export function buildGroups({ kalshi = {}, polymarket = {}, monthly = null, election2028 = null }) {
   const k = (t) => kalshi[t], p = (s) => polymarket[s];
@@ -170,8 +209,7 @@ export function buildGroups({ kalshi = {}, polymarket = {}, monthly = null, elec
   ].filter(Boolean);
   const e = election2028 || {};
   const election = [
-    ...(e.kalshi || []).map((r) => row(r.label, r)),
-    ...(e.polymarket || []).map((r) => row(r.label, r)),
+    ...mergeElection2028(e.kalshi, e.polymarket, 8),
     row('Democrat wins in 2028', k(K.PARTY_D)),
     row('Republican wins in 2028', k(K.PARTY_R)),
   ].filter(Boolean);
@@ -196,8 +234,13 @@ export function buildSnapshot({
   if (v.verdict === 'YES' && prev && prev.verdict === 'YES' && prev.endedAt && v.reason === prev.verdictReason) v.endedAt = prev.endedAt;
   const groups = buildGroups({ kalshi: km, polymarket: pm, monthly, election2028 });
   const daysLeft = Math.max(0, Math.floor((Date.parse(termEnd) - now) / 86400e3));
+  // §1.6 "both down → serve the last-good snapshot with ITS updatedAt": only a successful market fetch
+  // advances updatedAt; a carried-forward snapshot keeps chaining back to the last real fetch.
+  const marketsFresh = !!kalshi.ok || !!polymarket.ok;
+  const venueFlag = (v) => ({ ok: !!v.ok, at: v.at || null, error: v.error || null, partial: !!v.partial, missing: Array.isArray(v.missing) ? v.missing : [] });
   return {
-    updatedAt: new Date(now).toISOString(),
+    updatedAt: marketsFresh || !(prev && prev.updatedAt) ? new Date(now).toISOString() : prev.updatedAt,
+    stale: !marketsFresh,
     termEnd,
     verdict: v.verdict, verdictReason: v.reason, endedAt: v.endedAt,
     daysLeft,
@@ -208,8 +251,8 @@ export function buildSnapshot({
     monthly: monthly || null,
     markets: { kalshi: km, polymarket: pm },
     sources: {
-      kalshi: { ok: !!kalshi.ok, at: kalshi.at || null, error: kalshi.error || null },
-      polymarket: { ok: !!polymarket.ok, at: polymarket.at || null, error: polymarket.error || null },
+      kalshi: venueFlag(kalshi),
+      polymarket: venueFlag(polymarket),
       nyt: sourceFlag((approval || (prev && prev.approval) || {}).sources, 'nyt'),
       sb: sourceFlag((approval || (prev && prev.approval) || {}).sources, 'sb'),
       news: newsMeta || (prev && prev.sources && prev.sources.news) || { ok: false, at: null },

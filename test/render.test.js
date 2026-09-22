@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket } from '../src/lib/markets.js';
 import { buildSnapshot, computeApproval } from '../src/lib/snapshot.js';
-import { pageVars, fillTemplate, relTime, fmtVolume, daysLine, renderNews, renderOdds, renderApproval } from '../src/lib/render.js';
+import { pageVars, fillTemplate, relTime, fmtVolume, fmtDate, easternOffsetHours, daysLine, renderNews, renderOdds, renderApproval, renderHeadline, endedLabel } from '../src/lib/render.js';
 
 const fx = (n) => readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8');
 const NOW = Date.parse('2026-09-22T06:30:00Z');
@@ -48,6 +48,20 @@ test('YES state renders YES + "It ended <date>" and updates og description', () 
   assert.match(html, /class="answer-yes"/);
   assert.match(html, /content="YES\. It ended/);
   assert.match(html, /News unavailable/);
+  // the "chance it ends" lines contradict a YES: gone, replaced by public copy (never the raw reason)
+  assert.doesNotMatch(html, /id="ends-pct"/);
+  assert.doesNotMatch(html, /id="early-pct"/);
+  assert.match(html, /class="chance ended"/);
+  assert.match(html, /Marked as ended\./);
+  assert.doesNotMatch(html.slice(html.indexOf('<div class="banner"'), html.indexOf('</header>')), /config override/);   // raw reason only in the state JSON
+  assert.doesNotMatch(html, /Markets now expect an early exit/);
+  const vars = pageVars({ snap: s, news: null, origin: 'https://williteverend.com', now: NOW });
+  assert.doesNotMatch(vars.ogDescription, /Chance it actually ends/);
+  assert.equal(endedLabel({ verdictReason: 'term ended on schedule' }), 'The term ended on schedule.');
+  assert.match(endedLabel({ verdictReason: 'Kalshi KXTRUMPOUT27-27-JAN2029 settled YES' }), /^Kalshi.s "leaves office" market settled YES\.$/);
+  assert.match(endedLabel({ verdictReason: 'Polymarket trump-out-as-president-before-2027 resolved YES' }), /^Polymarket.s "out as President" market resolved YES\.$/);
+  assert.equal(endedLabel({ verdictReason: 'manual override (YES)' }), 'Marked as ended.');
+  assert.match(renderHeadline({ verdict: 'YES', verdictReason: 'term ended on schedule', ends: { pct: 89.6 }, early: { pct: 23.5, expectEarly: true } }), /^<p class="chance ended">.*schedule\.<\/span><\/p>$/);
 });
 
 test('graceful degradation: no odds / no approval / no news', () => {
@@ -61,12 +75,50 @@ test('graceful degradation: no odds / no approval / no news', () => {
   assert.match(vars.headline, /—/);
 });
 
-test('source-down warning and venue-only tag', () => {
+test('source-down warning (live relative time), partial warning and venue-only tag', () => {
   const s = snap();
   s.sources.kalshi = { ok: false, at: '2026-09-21T10:00:00Z', error: 'x' };
-  assert.match(renderOdds(s), /Kalshi unavailable — showing last good values from Sep 21, 2026/);
+  assert.match(renderOdds(s, NOW), /Kalshi unavailable — showing last good values from <time datetime="2026-09-21T10:00:00Z">21h ago<\/time>\./);
+  s.sources.kalshi = { ok: true, at: '2026-09-22T06:00:00Z', partial: true, missing: ['KXTRUMPPRES-28', 'KXTRUMPAPPROVALBELOW-26DEC31-37'] };
+  assert.match(renderOdds(s, NOW), /Kalshi did not return 2 of the expected markets \(KXTRUMPPRES-28, KXTRUMPAPPROVALBELOW-26DEC31-37\)/);
+  assert.doesNotMatch(renderOdds(s, NOW), /unavailable — showing/);
+  s.sources.kalshi = { ok: true, at: 'x', partial: false, missing: [] };
+  assert.doesNotMatch(renderOdds(s, NOW), /class="warn"/);
   const only = buildSnapshot({ now: NOW, config, polymarket: { ok: true, markets: s.markets.polymarket } });
   assert.match(pageVars({ snap: only, news: null, now: NOW }).headline, /\(Polymarket only\)/);
+});
+
+test('renderNews never emits a non-http(s) href (stale KV content written before the scheme filter)', () => {
+  const bad = { items: [{ title: 'x', link: 'javascript:alert(1)', pubDate: '2026-09-22T03:00:00Z' }, { title: 'y', link: 'data:text/html,hi' }] };
+  const out = renderNews(bad, NOW);
+  assert.doesNotMatch(out, /href="javascript:/);
+  assert.doesNotMatch(out, /href="data:/);
+  assert.match(out, /News unavailable/);
+  const mixed = renderNews({ items: [...bad.items, { title: 'ok', link: 'https://a.test/x', source: 'S', pubDate: '2026-09-22T03:00:00Z' }] }, NOW);
+  assert.match(mixed, /href="https:\/\/a\.test\/x"/);
+  assert.doesNotMatch(mixed, /javascript:/);
+});
+
+test('pageVars: origin comes from the caller (config site, not the Host header) and stateJson has no raw <', () => {
+  const s = snap();
+  const vars = pageVars({ snap: s, news: { items: [{ title: '</script><script>alert(1)</script>', link: 'https://a.test/x' }] }, origin: 'https://williteverend.com', now: NOW });
+  assert.equal(vars.origin, 'https://williteverend.com');
+  assert.doesNotMatch(vars.stateJson, /</);
+  assert.match(vars.stateJson, /"stale":false/);
+  assert.match(vars.stateJson, /"verdictReason":"no settled exit market/);
+  const tpl = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  assert.match(fillTemplate(tpl, vars), /<link rel="canonical" href="https:\/\/williteverend\.com\/">/);
+});
+
+test('fmtDate: fixed America/New_York formatter matches Intl across DST boundaries', () => {
+  const intl = (iso) => new Date(Date.parse(iso)).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'America/New_York' });
+  for (const iso of ['2026-09-22T03:59:59Z', '2026-09-22T04:00:00Z', '2026-03-08T06:59:59Z', '2026-03-08T07:00:00Z', '2026-11-01T05:59:59Z', '2026-11-01T06:00:00Z',
+    '2026-12-31T04:59:59Z', '2026-12-31T05:00:00Z', '2029-01-20T17:00:00Z', '2027-01-01T04:59:00Z', '2026-10-01T03:59:00Z', '2028-03-12T06:30:00Z']) {
+    assert.equal(fmtDate(iso), intl(iso), iso);
+  }
+  assert.equal(easternOffsetHours(Date.parse('2026-07-04T12:00:00Z')), -4);
+  assert.equal(easternOffsetHours(Date.parse('2026-01-04T12:00:00Z')), -5);
+  assert.equal(fmtDate('garbage'), '');
 });
 
 test('helpers', () => {

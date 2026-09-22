@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket, parsePolymarket2028, kalshiLink, pmYes, pickMonthlyOutEvent, polymarketRow } from '../src/lib/markets.js';
+import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket, parsePolymarket2028, parseKalshi2028, kalshiLink, pmYes, pickMonthlyOutEvent, polymarketRow } from '../src/lib/markets.js';
 
 const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'));
 
@@ -27,6 +27,15 @@ test('Kalshi single-market shape and missing prices', () => {
   const k = parseKalshiBatch({ market: { ticker: 'X', event_ticker: 'X-1', last_price_dollars: '0.5000', status: 'finalized', result: 'yes' } });
   assert.equal(k.X.prob, 0.5); assert.equal(k.X.closed, true); assert.equal(k.X.result, 'yes');
   assert.throws(() => parseKalshiBatch({}), /no markets/);
+});
+
+test('a 200 with an empty market list is a failure, never an empty success', () => {
+  assert.throws(() => parseKalshiBatch({ cursor: '', markets: [] }), /0 markets/);
+  assert.throws(() => parsePolymarketKeyset({ events: [] }), /0 markets/);
+  assert.throws(() => parsePolymarketKeyset({ events: [{ slug: 'x', markets: [] }] }), /0 markets/);
+  assert.throws(() => parseKalshi2028({ markets: [] }), /0 markets/);
+  assert.throws(() => parsePolymarket2028({ markets: [] }), /0 priced/);
+  assert.throws(() => parsePolymarket2028({ markets: [{ slug: 'p', active: false }] }), /0 priced/);
 });
 
 test('Polymarket keyset: JSON-string outcomePrices, liquidity/spread gating, resolved-yes detection', () => {

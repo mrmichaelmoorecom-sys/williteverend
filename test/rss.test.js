@@ -7,7 +7,7 @@ const fx = (n) => readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf
 
 test('Google News: strips " - Publisher" suffix using <source>, decodes entities, keeps stub link + guid', () => {
   const items = parseRss(fx('f_gnews.xml'), { name: 'Google News' });
-  assert.equal(items.length, 8);
+  assert.equal(items.length, 9);
   const first = items[0];
   assert.equal(first.title, 'Trump Administration');
   assert.equal(first.source, 'ABC News');
@@ -19,6 +19,11 @@ test('Google News: strips " - Publisher" suffix using <source>, decodes entities
   assert.equal(aj.title, 'CNN, Politico, MS NOW sue Trump administration over White House ban');
   assert.equal(aj.source, 'Al Jazeera');
   for (const it of items) assert.ok(!/&(amp|apos|#\d+);/.test(it.title), `entity left in: ${it.title}`);
+  // The only entity-bearing item: "&amp;" must be decoded in the <source> text (which also drives the suffix strip).
+  const us = items[8];
+  assert.equal(us.title, 'Trump Administration Sued Over Withheld Federal Grants for US Community Lenders');
+  assert.equal(us.source, 'U.S. News & World Report');
+  assert.equal(us.sourceUrl, 'https://www.usnews.com');
 });
 
 test('Politico: EDT pubDates normalize to -0400, source hardcoded, no CDATA leakage', () => {
@@ -32,13 +37,44 @@ test('Politico: EDT pubDates normalize to -0400, source hardcoded, no CDATA leak
   for (const it of items) assert.ok(!it.title.includes('CDATA'));
 });
 
-test('The Hill: CDATA fields, +0000 dates, WordPress guid', () => {
+test('The Hill: &#039; titles decoded, +0000 dates, WordPress guid', () => {
   const items = parseRss(fx('f_hill.xml'), { name: 'The Hill', homepage: 'https://thehill.com' });
   assert.ok(items.length >= 10);
   assert.equal(items[0].title, 'White House launches Trump TV following press bans');
   assert.equal(items[0].link, 'https://thehill.com/homenews/administration/6103061-white-house-launches-trump-tv/');
   assert.equal(items[0].pubDate, '2026-09-22T03:08:31.000Z');
   assert.equal(items[0].guid, 'https://thehill.com/?p=6103061');
+  assert.equal(items[7].title, "Collins, Murray speak out against reported Trump push to 'politicize grantmaking'");
+});
+
+test('CDATA-wrapped title/link/guid/pubDate are unwrapped', () => {
+  const xml = '<rss><channel><item><title><![CDATA[Trump\'s "plan" & more]]></title><link><![CDATA[https://x.test/a?b=1&c=2]]></link><guid isPermaLink="false"><![CDATA[abc-123]]></guid><pubDate><![CDATA[Tue, 22 Sep 2026 03:08:31 +0000]]></pubDate></item></channel></rss>';
+  const [it] = parseRss(xml, { name: 'X' });
+  assert.equal(it.title, 'Trump\'s "plan" & more');
+  assert.equal(it.link, 'https://x.test/a?b=1&c=2');
+  assert.equal(it.guid, 'abc-123');
+  assert.equal(it.pubDate, '2026-09-22T03:08:31.000Z');
+});
+
+test('only http(s) links survive: javascript:/data:/vbscript:/entity-encoded/relative are dropped', () => {
+  const item = (title, link) => `<item><title>${title}</title><link>${link}</link><pubDate>Tue, 22 Sep 2026 03:08:31 +0000</pubDate></item>`;
+  const xml = `<rss><channel>${[
+    item('js', 'javascript:alert(document.cookie)'),
+    item('data', 'data:text/html,hi'),
+    item('vb', 'vbscript:msgbox(1)'),
+    item('spaced', ' JaVaScRiPt:alert(1)'),
+    item('encoded', '&#106;avascript:alert(2)'),
+    item('relative', '/foo'),
+    item('good', 'https://example.com/story?a=1&amp;b=2'),
+  ].join('')}</channel></rss>`;
+  const items = parseRss(xml, { name: 'X', homepage: 'javascript:alert(3)' });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].title, 'good');
+  assert.equal(items[0].link, 'https://example.com/story?a=1&b=2');
+  assert.equal(items[0].sourceUrl, '');
+  // mergeItems is the second gate (stale KV content, foreign lists)
+  const merged = mergeItems([[{ title: 'bad', link: 'javascript:alert(1)', pubDate: '2026-09-22T03:00:00Z' }, { title: 'ok', link: 'https://a.test/x', pubDate: '2026-09-22T03:00:00Z' }]], { now: Date.parse('2026-09-22T06:30:00Z') });
+  assert.deepEqual(merged.map((i) => i.title), ['ok']);
 });
 
 test('Guardian: plain titles, GMT dates', () => {

@@ -1,5 +1,5 @@
 // Server-side HTML rendering of the page sections + template fill. Pure functions, no I/O.
-import { escapeHtml as h } from './entities.js';
+import { escapeHtml as h, safeHttpUrl } from './entities.js';
 
 export const fmtPct = (pct, d = 1) => (pct == null || !Number.isFinite(pct) ? '—' : `${pct.toFixed(d)}%`);
 export const fmtSigned = (n) => (n == null ? '—' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${Math.abs(n).toFixed(1)}`);
@@ -21,9 +21,20 @@ export function relTime(iso, now = Date.now()) {
   return `${Math.round(hr / 24)}d ago`;
 }
 
-export function fmtDate(iso, opts = {}) {
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const nthSundayUtc = (y, month, n) => { const first = new Date(Date.UTC(y, month, 1)).getUTCDay(); return Date.UTC(y, month, 1 + ((7 - first) % 7) + (n - 1) * 7); };
+/** US Eastern offset in hours (EDT −4 from the 2nd Sunday of March 2:00 to the 1st Sunday of November 2:00, else EST −5). */
+export function easternOffsetHours(t) {
+  const y = new Date(t).getUTCFullYear();
+  const dstStart = nthSundayUtc(y, 2, 2) + 7 * 3600e3;   // 02:00 EST → 07:00 UTC
+  const dstEnd = nthSundayUtc(y, 10, 1) + 6 * 3600e3;    // 02:00 EDT → 06:00 UTC
+  return t >= dstStart && t < dstEnd ? -4 : -5;
+}
+/** "Sep 22, 2026" in America/New_York. Fixed formatter: the first toLocaleDateString(timeZone) call loads ICU tz data (~17 ms in Node). */
+export function fmtDate(iso) {
   const t = Date.parse(iso); if (!Number.isFinite(t)) return '';
-  return new Date(t).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'America/New_York', ...opts });
+  const d = new Date(t + easternOffsetHours(t) * 3600e3);
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
 }
 
 /** Days-left line + title (also computed client-side; this is the no-JS seed). */
@@ -41,16 +52,30 @@ function venueTag(venues) {
   return ` <span class="tag">(${h(venues[0])} only)</span>`;
 }
 
+/** Public copy for the YES banner; never prints the raw verdictReason (internal string). */
+export function endedLabel(snap) {
+  const r = String((snap && snap.verdictReason) || '');
+  if (/term ended on schedule/.test(r)) return 'The term ended on schedule.';
+  if (/^Kalshi .* settled YES$/.test(r)) return 'Kalshi\u2019s "leaves office" market settled YES.';
+  if (/^Polymarket .* resolved YES$/.test(r)) return 'Polymarket\u2019s "out as President" market resolved YES.';
+  return 'Marked as ended.';
+}
+
 export function renderHeadline(snap) {
+  if (snap.verdict === 'YES') return `<p class="chance ended"><span class="k">${h(endedLabel(snap))}</span></p>`;
   const ends = snap.ends || {}, early = snap.early || {};
   const sub = early.expectEarly ? '<p class="expect">Markets now expect an early exit.</p>' : '';
   return `<p class="chance"><span class="k">Chance it actually ends:</span> <strong id="ends-pct">${fmtPct(ends.pct)}</strong>${venueTag(ends.venues)}</p>
 <p class="chance secondary"><span class="k">Chance it ends early:</span> <strong id="early-pct">${fmtPct(early.pct)}</strong>${early.before2027 && early.before2027.pct != null ? ` <span class="tag">· before 2027: ${fmtPct(early.before2027.pct)}</span>` : ''}</p>${sub}`;
 }
 
+const thinFlag = '<span class="flag" title="wide spread or low liquidity">thin</span>';
 function rowHtml(r) {
-  const venue = `<a href="${h(r.link)}" target="_blank" rel="noopener">${h(r.venue)}</a>`;
-  const flags = [r.thin ? '<span class="flag" title="wide spread or low liquidity">thin</span>' : '', r.closed ? '<span class="flag">closed</span>' : ''].filter(Boolean).join(' ');
+  // Merged rows (2028 candidates) list every venue with its own price; Yes is the cross-venue mean.
+  const venue = r.byVenue
+    ? Object.entries(r.byVenue).map(([v, x]) => `<a href="${h(x.link)}" target="_blank" rel="noopener">${h(v)}</a> <span class="vp">${fmtPct(x.pct)}</span>${x.thin ? ' ' + thinFlag : ''}`).join(' · ')
+    : `<a href="${h(r.link)}" target="_blank" rel="noopener">${h(r.venue)}</a>`;
+  const flags = [r.thin && !r.byVenue ? thinFlag : '', r.closed ? '<span class="flag">closed</span>' : ''].filter(Boolean).join(' ');
   const note = r.note ? `<span class="note">${h(r.note)}</span>` : '';
   return `<tr${r.primary ? ' class="primary"' : ''}><th scope="row">${h(r.label)}${note}</th><td class="num">${fmtPct(r.pct)}</td><td>${venue}${flags ? ' ' + flags : ''}</td><td class="vol">${h(fmtVolume(r.volume))}</td></tr>`;
 }
@@ -79,11 +104,20 @@ export function renderEmbeds(snap) {
   return blocks.length ? `<div class="embeds">${blocks.join('\n')}</div>` : '';
 }
 
-export function renderOdds(snap) {
+const VENUE_NAME = { kalshi: 'Kalshi', polymarket: 'Polymarket' };
+export function renderOdds(snap, now = Date.now()) {
   const g = snap.groups || {};
   const src = snap.sources || {};
   const down = ['kalshi', 'polymarket'].filter((k) => src[k] && !src[k].ok);
-  const warn = down.length ? `<p class="warn">${down.map((k) => (k === 'kalshi' ? 'Kalshi' : 'Polymarket')).join(' and ')} unavailable — showing last good values${src[down[0]].at ? ` from ${h(fmtDate(src[down[0]].at))}` : ''}.</p>` : '';
+  const at = down.length ? src[down[0]].at : null;
+  let warn = down.length ? `<p class="warn">${down.map((k) => VENUE_NAME[k]).join(' and ')} unavailable — showing last good values${at ? ` from <time datetime="${h(at)}">${h(relTime(at, now))}</time>` : ''}.</p>` : '';
+  // A 200 that omits some of the expected markets: rows are simply missing, say so.
+  for (const k of ['kalshi', 'polymarket']) {
+    const v = src[k];
+    if (v && v.ok && v.partial && Array.isArray(v.missing) && v.missing.length) {
+      warn += `<p class="warn">${VENUE_NAME[k]} did not return ${v.missing.length} of the expected markets (${h(v.missing.join(', '))}) — those rows are omitted.</p>`;
+    }
+  }
   const anyRows = ['early', 'stays', 'election2028'].some((k) => g[k] && g[k].length);
   if (!anyRows) return `<p class="unavail">Odds unavailable right now.</p>`;
   return `${warn}${tableHtml('Leaves early', g.early, 'odds-early')}
@@ -105,7 +139,8 @@ export function renderApproval(snap) {
 }
 
 export function renderNews(news, now = Date.now()) {
-  const items = (news && news.items) || [];
+  // KV `news` is rendered verbatim, so guard the href scheme here too (items written before the rss.js filter persist until the next news job).
+  const items = ((news && news.items) || []).filter((it) => it && safeHttpUrl(it.link));
   if (!items.length) return `<p class="unavail">News unavailable.</p>`;
   return `<ol class="news">${items.slice(0, 30).map((it) => `<li><a href="${h(it.link)}" target="_blank" rel="noopener">${h(it.title)}</a> <span class="src">${h(it.source || '')}${it.pubDate ? ` · <time datetime="${h(it.pubDate)}">${relTime(it.pubDate, now)}</time>` : ''}</span></li>`).join('\n')}</ol>`;
 }
@@ -124,15 +159,17 @@ export function pageVars({ snap, news, origin = '', now = Date.now() }) {
   const c = snap.config || {};
   const p = c.president || {};
   const ends = snap.ends && snap.ends.pct != null ? `${snap.ends.pct.toFixed(1)}%` : 'unknown';
-  const desc = `${answer}. ${dl.text}. Chance it actually ends by Jan 20, 2029: ${ends}. Live odds, approval and news on the ${p.name || 'presidential'} term.`;
+  const desc = answer === 'YES'
+    ? `${answer}. ${dl.text}. Live odds, approval and news on the ${p.name || 'presidential'} term.`
+    : `${answer}. ${dl.text}. Chance it actually ends by Jan 20, 2029: ${ends}. Live odds, approval and news on the ${p.name || 'presidential'} term.`;
   const stateJson = JSON.stringify({
-    updatedAt: snap.updatedAt, termEnd: snap.termEnd, verdict: answer, endedAt: snap.endedAt, ends: snap.ends, early: snap.early,
+    updatedAt: snap.updatedAt, stale: !!snap.stale, termEnd: snap.termEnd, verdict: answer, verdictReason: snap.verdictReason || null, endedAt: snap.endedAt, ends: snap.ends, early: snap.early,
     approval: snap.approval && { approve: snap.approval.approve, disapprove: snap.approval.disapprove, net: snap.approval.net }, sources: snap.sources,
   }).replace(/</g, '\\u003c');
   const newsAt = news && news.updatedAt;
   return {
     answer, answerClass: answer.toLowerCase(), daysLine: h(dl.text), daysTitle: h(dl.title),
-    headline: renderHeadline(snap), odds: renderOdds(snap), approval: renderApproval(snap), news: renderNews(news, now),
+    headline: renderHeadline(snap), odds: renderOdds(snap, now), approval: renderApproval(snap), news: renderNews(news, now),
     updatedIso: h(snap.updatedAt || ''), updatedRel: h(relTime(snap.updatedAt, now)),
     newsUpdatedIso: h(newsAt || ''), newsUpdatedRel: h(newsAt ? relTime(newsAt, now) : ''),
     stateJson, ogDescription: h(desc), origin: h(origin), favicon: faviconSvg(answer),
