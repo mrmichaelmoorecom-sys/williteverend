@@ -98,12 +98,19 @@ npx wrangler kv key delete --binding STATE override --remote      # un-flip (npm
 ## Kalshi and 429s
 
 Kalshi rate-limits anonymous traffic per source IP, and Cloudflare Workers share their egress IPs with
-thousands of other tenants: in production every `api.elections.kalshi.com` call from the Worker returned
-HTTP 429 while the identical request from anywhere else returned 200. Without Kalshi the headline is
-Polymarket-only (98.6% instead of ~89.6%), "chance it ends early" is "—", the Leaves-early table has no
-Kalshi rows and flip rule #2 can never fire. The Worker retries a 429/5xx twice (2–4 s apart, wall clock)
-as a mitigation; the real fix needs a credential that only the account owner can create. Two routes, both
-already wired up and inert until configured — pick ONE:
+thousands of other tenants. Probed from the edge (2026-09-22, every User-Agent): the **list** endpoints
+(`/markets?tickers=…`, `/markets?event_ticker=…`) answer HTTP 429 `too_many_requests`, while the
+**single-market** endpoint (`/markets/{ticker}`) and the **event** endpoint
+(`/events/{ticker}?with_nested_markets=true`) answer 200 from the same edge. So the Worker tries, in order:
+
+1. the 18-ticker batch (1 subrequest — works from anywhere that is not a shared edge IP);
+2. one request per ticker in parallel (18 subrequests, no retries) → `sources.kalshi.via = "singles"`;
+3. the KV relay document (below) if younger than 45 minutes → `via = "relay"`;
+4. the previous good map, row by row (`sources.kalshi.ok = false`, rows marked `carried`).
+
+The 2028 election leg does the same: list → event endpoint → relay. In production step 2 is what runs.
+If Kalshi ever throttles the single-market endpoint too, two credential routes are already wired up and
+inert until configured — pick ONE:
 
 **A. Kalshi API key (signed requests; limits become per-key).** Unverified whether a key bypasses the
 IP-level 429 — confirm with one deploy before relying on it.
@@ -121,20 +128,16 @@ requests stay keyless, so `wrangler dev` and the tests are unchanged.
 
 **B. Relay from a different egress (GitHub Actions → KV).** `.github/workflows/kalshi.yml` fetches the
 18-ticker batch and the `KXPRESPERSON-28` list from a GitHub runner and PUTs
-`{ fetchedAt, batch, election2028 }` to KV key `kalshi`. When the Worker's direct call fails it reads
-that key and, if it is younger than 45 minutes, uses it (`sources.kalshi.via = "relay"`, `at` = the
-relay's fetch time); older than that it is ignored and the previous map is carried as before.
+`{ fetchedAt, batch, election2028 }` to KV key `kalshi`.
 
 1. Cloudflare dashboard → My Profile → API Tokens → Create Token → permission **Workers KV Storage: Edit**
    scoped to this account only. GitHub repo → Settings → Secrets → Actions: `CF_KV_TOKEN` = that token,
    `CF_ACCOUNT_ID` = the account id (dashboard → Workers & Pages → overview, right column).
 2. Run the workflow once by hand (Actions → "Kalshi relay" → Run workflow) and check the job log says the
-   Kalshi calls returned 200 (GitHub's runners are a shared pool too; this proves they are not limited).
-3. Uncomment the `schedule:` block in the workflow. Every 15 minutes = ~96 runs/day; each run bills a
-   minute, so a PRIVATE repo stays under the 2,000 free minutes/month only at 15 min or slower (a public
-   repo is unmetered).
+   Kalshi calls returned 200.
+3. Uncomment the `schedule:` block in the workflow (this repo is public, so Actions minutes are free).
 
-Either way, verify after deploy across two cron ticks with `/api/state`: `sources.kalshi.ok === true`,
+Verify after any change across two cron ticks with `/api/state`: `sources.kalshi.ok === true`,
 `markets.kalshi` has 18 keys, `ends.venues == ["Kalshi","Polymarket"]` with `ends.pct` ≈ 89–90,
 `early.pct` non-null, `election2028.kalshi` non-null; the page shows kalshi.com links and no
 "(Polymarket only)" tag.

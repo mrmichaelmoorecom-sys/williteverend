@@ -98,13 +98,33 @@ async function readRelay(env, now) {
   if (!(age < tuning.relayMaxAgeMs)) return { doc: null, why: `relay stale (${Math.round(age / 60e3)}m old)` };
   return { doc, why: null };
 }
+/**
+ * Kalshi's LIST endpoints (`/markets?tickers=`, `/markets?event_ticker=`) answer HTTP 429 to Cloudflare's shared
+ * egress IPs while the single-market (`/markets/{ticker}`) and event (`/events/{ticker}`) endpoints answer 200
+ * from the same edge (probed 2026-09-22, every UA). So: batch first (1 subrequest; works from anywhere else),
+ * then one request per ticker in parallel (18 subrequests, no retries), then the relay, then the previous map.
+ */
+const fetchKalshiSingles = async (env) => {
+  const results = await Promise.allSettled(KALSHI_TICKERS.map((t) => getJson(`${KALSHI}/markets/${t}`, { ...kalshiOpts(env), retries: 0 })));
+  const markets = results.filter((r) => r.status === 'fulfilled' && r.value && r.value.market).map((r) => r.value.market);
+  const firstErr = results.find((r) => r.status === 'rejected');
+  if (!markets.length) throw new Error(firstErr ? reason(firstErr.reason) : 'no markets');
+  const out = kalshiBatch({ markets });
+  return { ...out, via: 'singles' };   // `missing` already surfaces as sources.kalshi.partial, same as the batch path
+};
 const fetchKalshi = async (env, now = Date.now()) => {
-  try { return await getJson(`${KALSHI}/markets?tickers=${KALSHI_TICKERS.join(',')}`, kalshiOpts(env)).then(kalshiBatch); }
-  catch (e) {
-    const relay = await readRelay(env, now);
-    if (!relay.doc || !relay.doc.batch) throw relay.why ? new Error(`${reason(e)}; ${relay.why}`) : e;
-    return { ...kalshiBatch(relay.doc.batch), at: relay.doc.fetchedAt, via: 'relay', warning: `direct fetch failed (${reason(e)}); values via the relay` };
-  }
+  let batchErr;
+  try { return await getJson(`${KALSHI}/markets?tickers=${KALSHI_TICKERS.join(',')}`, { ...kalshiOpts(env), retries: 0 }).then(kalshiBatch); }
+  catch (e) { batchErr = e; }
+  let singlesErr;
+  try { return await fetchKalshiSingles(env); }
+  catch (e) { singlesErr = e; }
+  const relay = await readRelay(env, now);
+  // Compact: `attempt()` keeps 200 chars and the batch URL alone is longer than that.
+  const code = (e) => { const m = /^HTTP \d+/.exec(reason(e)); return m ? m[0] : reason(e).slice(0, 60); };
+  const why = `${code(batchErr)} (batch); ${code(singlesErr)} (per-ticker)${relay.why ? `; ${relay.why}` : ''}`;
+  if (!relay.doc || !relay.doc.batch) throw new Error(why);
+  return { ...kalshiBatch(relay.doc.batch), at: relay.doc.fetchedAt, via: 'relay', warning: `direct fetch failed (${why}); values via the relay` };
 };
 const fetchPolymarket = async () => {
   const keyset = await getJson(`${GAMMA}/events/keyset?${PM_KEYSET_EVENTS.map((s) => `slug=${s}`).join('&')}`);
@@ -140,11 +160,15 @@ const discoverMonthly = async (now = Date.now()) => {
 const ELECTION_DEPTH = 20;
 const fetchElection2028 = async (env, now = Date.now()) => {
   const kalshiLeg = async () => {
-    try { return await getJson(`${KALSHI}/markets?event_ticker=KXPRESPERSON-28&status=open&limit=200`, kalshiOpts(env)).then((j) => parseKalshi2028(j, ELECTION_DEPTH)); }
+    try { return await getJson(`${KALSHI}/markets?event_ticker=KXPRESPERSON-28&status=open&limit=200`, { ...kalshiOpts(env), retries: 0 }).then((j) => parseKalshi2028(j, ELECTION_DEPTH)); }
     catch (e) {
-      const relay = await readRelay(env, now);
-      if (!relay.doc || !relay.doc.election2028) throw e;
-      return parseKalshi2028(relay.doc.election2028, ELECTION_DEPTH);
+      // List endpoint throttled (see fetchKalshi): the event endpoint nests the same market objects.
+      try { return await getJson(`${KALSHI}/events/KXPRESPERSON-28?with_nested_markets=true`, kalshiOpts(env)).then((j) => parseKalshi2028({ markets: j && j.event && j.event.markets }, ELECTION_DEPTH)); }
+      catch (e2) {
+        const relay = await readRelay(env, now);
+        if (!relay.doc || !relay.doc.election2028) throw new Error(`${reason(e)}; ${reason(e2)}`);
+        return parseKalshi2028(relay.doc.election2028, ELECTION_DEPTH);
+      }
     }
   };
   const [k, p] = await Promise.allSettled([
@@ -296,25 +320,6 @@ export default {
       if (path === '/api/state' || path === '/api/snapshot') return await cached(request, ctx, async () => json(await getSnapshot(env), 60));
       if (path === '/api/news') return await cached(request, ctx, async () => { const n = await getNews(env); return json(n, n.items.length ? 120 : 30); });
       if (path === '/api/health') return json({ ok: true, now: new Date().toISOString() }, 0);
-      if (path === '/api/_probe') {
-        // TEMPORARY diagnostic (remove after use): what does Kalshi answer from this edge? Fixed URL set only.
-        const PROBES = {
-          batch_bot: [`${KALSHI}/markets?tickers=KXTRUMPOUT27-27-JAN2029,KXTRUMPRESIGN`, UA],
-          batch_browser: [`${KALSHI}/markets?tickers=KXTRUMPOUT27-27-JAN2029,KXTRUMPRESIGN`, BROWSER_UA],
-          single_bot: [`${KALSHI}/markets/KXTRUMPRESIGN`, UA],
-          single_browser: [`${KALSHI}/markets/KXTRUMPREMOVE`, BROWSER_UA],
-          event_browser: [`${KALSHI}/markets?event_ticker=KXPRESPERSON-28&status=open&limit=200`, BROWSER_UA],
-          batch_noua: [`${KALSHI}/markets?tickers=KXAMEND25-29,KXIMPEACH-29-JAN20`, ''],
-        };
-        const out = {};
-        for (const [k, [u, ua]] of Object.entries(PROBES)) {
-          try {
-            const r = await fetch(u, { headers: { ...(ua ? { 'user-agent': ua } : {}), accept: 'application/json' } });
-            out[k] = { status: r.status, headers: Object.fromEntries([...r.headers].filter(([h]) => /retry|cache|via|x-|cf-|server|date|content-type/i.test(h))), body: (await r.text()).slice(0, 120) };
-          } catch (e) { out[k] = { error: String(e) }; }
-        }
-        return json({ colo: request.cf && request.cf.colo, out }, 0);
-      }
       if (path.startsWith('/api/')) return json({ error: 'not found' }, 0, 404);
       if (path === '/' || path === '/index.html') return await cached(request, ctx, () => renderPage(request, env));
     } catch (e) {

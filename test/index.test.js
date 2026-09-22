@@ -264,30 +264,39 @@ test('partial 200: a single missing Kalshi ticker is carried from the last good 
   assert.ok(snap.sources.kalshi.carried.includes('KXPRESPERSON-28-DTRU') && snap.sources.kalshi.carried.includes('KXPRESELECTIONOCCUR-28'));
 });
 
-test('Kalshi 429 / 5xx: bounded retry (2×) then the KV relay if fresh, else the previous map', async () => {
+test('Kalshi 429: batch → per-ticker singles → KV relay → previous map', async () => {
   const STATE = kv();
   let calls = []; mockFetch(calls);
   const first = (await refresh({ STATE }, { now: NOW })).snap;
-  // 429 twice then 200 → success on the third attempt
-  let n = 0;
-  calls = []; mockFetch(calls, { '/markets?tickers=': () => (++n < 3 ? new Response('rate limited', { status: 429 }) : new Response(fx('k_batch.json'), { status: 200 })) });
+  const batch = JSON.parse(fx('k_batch.json'));
+  const single = (u) => { const t = u.split('/markets/')[1]; const m = batch.markets.find((x) => x.ticker === t); return m ? new Response(JSON.stringify({ market: m }), { status: 200 }) : new Response('{"error":{"code":"not_found"}}', { status: 404 }); };
+  // batch 429 (not retried — it is a known-persistent throttle) → 18 singles → ok, via 'singles', same headline
+  calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('rate limited', { status: 429 }), '/trade-api/v2/markets/KX': single });
   let { snap } = await refresh({ STATE }, { schedule: true, now: NOW + 600e3 });
-  assert.equal(n, 3); assert.equal(snap.sources.kalshi.ok, true); assert.equal(snap.sources.kalshi.via, null);
-  assert.equal(calls.filter((u) => u.includes('/markets?tickers=')).length, 3);
-  // always 429, no relay → carried map, ok:false, error names the 429, exactly 3 attempts
-  calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('rate limited', { status: 429 }) });
-  ({ snap } = await refresh({ STATE }, { schedule: true, now: NOW + 1200e3 }));
-  assert.equal(snap.sources.kalshi.ok, false); assert.match(snap.sources.kalshi.error, /^HTTP 429 /);
-  assert.equal(calls.filter((u) => u.includes('/markets?tickers=')).length, 3);
-  assert.equal(snap.ends.pct, 89.6); assert.equal(Object.keys(snap.markets.kalshi).length, 16);
-  // a 404 is not retried
-  calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('nope', { status: 404 }) });
-  ({ snap } = await refresh({ STATE }, { schedule: true, now: NOW + 1800e3 }));
   assert.equal(calls.filter((u) => u.includes('/markets?tickers=')).length, 1);
+  assert.equal(calls.filter((u) => /\/trade-api\/v2\/markets\/KX/.test(u)).length, 18);
+  assert.equal(snap.sources.kalshi.ok, true); assert.equal(snap.sources.kalshi.via, 'singles'); assert.equal(snap.sources.kalshi.error, null);
+  assert.equal(snap.ends.pct, 89.6); assert.equal(Object.keys(snap.markets.kalshi).length, 16);
+  // singles partially missing (2 tickers 404) → still ok, warning names them, the 2 rows are carried from before
+  calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('rate limited', { status: 429 }), '/trade-api/v2/markets/KXTRUMPRUN-28NOV07': () => new Response('x', { status: 404 }), '/trade-api/v2/markets/KX': single });
+  ({ snap } = await refresh({ STATE }, { schedule: true, now: NOW + 900e3 }));
+  assert.equal(snap.sources.kalshi.ok, true); assert.equal(snap.sources.kalshi.via, 'singles');
+  assert.ok(snap.sources.kalshi.partial && snap.sources.kalshi.missing.includes('KXTRUMPRUN-28NOV07'));
+  assert.ok(snap.sources.kalshi.carried.includes('KXTRUMPRUN-28NOV07'));
+  assert.equal(snap.ends.pct, 89.6);
+  // batch AND singles 429, no relay → carried map, ok:false, error names both failures
+  calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('rate limited', { status: 429 }), '/trade-api/v2/markets/KX': () => new Response('rate limited', { status: 429 }) });
+  ({ snap } = await refresh({ STATE }, { schedule: true, now: NOW + 1200e3 }));
+  assert.equal(snap.sources.kalshi.ok, false); assert.match(snap.sources.kalshi.error, /^HTTP 429 \(batch\); HTTP 429 \(per-ticker\)/);
+  assert.equal(snap.ends.pct, 89.6); assert.equal(Object.keys(snap.markets.kalshi).length, 16);
+  // a 404 on the batch also falls through to singles (one batch call only)
+  calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('nope', { status: 404 }), '/trade-api/v2/markets/KX': single });
+  ({ snap } = await refresh({ STATE }, { schedule: true, now: NOW + 1800e3 }));
+  assert.equal(calls.filter((u) => u.includes('/markets?tickers=')).length, 1); assert.equal(snap.sources.kalshi.via, 'singles');
   // a fresh relay document (written by the GitHub Actions workflow) is used when the direct call fails
   const fetchedAt = new Date(NOW + 2400e3 - 10 * 60e3).toISOString();
   await STATE.put('kalshi', JSON.stringify({ fetchedAt, batch: JSON.parse(fx('k_batch.json')), election2028: JSON.parse(fx('k2028.json')) }));
-  calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('rate limited', { status: 429 }), 'event_ticker=KXPRESPERSON-28': () => new Response('rate limited', { status: 429 }) });
+  calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('rate limited', { status: 429 }), '/trade-api/v2/markets/KX': () => new Response('rate limited', { status: 429 }), 'event_ticker=KXPRESPERSON-28': () => new Response('rate limited', { status: 429 }), '/events/KXPRESPERSON-28': () => new Response('rate limited', { status: 429 }) });
   ({ snap } = await refresh({ STATE }, { job: 'election2028', now: NOW + 2400e3 }));
   assert.equal(snap.sources.kalshi.ok, true); assert.equal(snap.sources.kalshi.via, 'relay'); assert.equal(snap.sources.kalshi.at, fetchedAt);
   assert.match(snap.sources.kalshi.error, /direct fetch failed \(HTTP 429 .*\); values via the relay/);
