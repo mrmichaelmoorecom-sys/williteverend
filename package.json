@@ -1,0 +1,14 @@
+{
+  "name": "williteverend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Will it ever end? — williteverend.com",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}
