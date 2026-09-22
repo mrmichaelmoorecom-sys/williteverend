@@ -296,6 +296,23 @@ export default {
       if (path === '/api/state' || path === '/api/snapshot') return await cached(request, ctx, async () => json(await getSnapshot(env), 60));
       if (path === '/api/news') return await cached(request, ctx, async () => { const n = await getNews(env); return json(n, n.items.length ? 120 : 30); });
       if (path === '/api/health') return json({ ok: true, now: new Date().toISOString() }, 0);
+      if (path === '/api/_probe') {
+        // TEMPORARY diagnostic (remove after use): what does Kalshi answer from this edge? Fixed URL set only.
+        const PROBES = {
+          batch1: `${KALSHI}/markets?tickers=KXTRUMPOUT27-27-JAN2029`,
+          single: `${KALSHI}/markets/KXTRUMPOUT27-27-JAN2029`,
+          alt: 'https://api.kalshi.com/trade-api/v2/markets?tickers=KXTRUMPOUT27-27-JAN2029',
+          exch: `${KALSHI}/exchange/status`,
+        };
+        const out = {};
+        for (const [k, u] of Object.entries(PROBES)) {
+          try {
+            const r = await fetch(u, { headers: { 'user-agent': k === 'single' ? BROWSER_UA : UA, accept: 'application/json' } });
+            out[k] = { status: r.status, headers: Object.fromEntries([...r.headers].filter(([h]) => /retry|cache|via|x-|cf-|server|date|content-type/i.test(h))), body: (await r.text()).slice(0, 400) };
+          } catch (e) { out[k] = { error: String(e) }; }
+        }
+        return json({ colo: request.cf && request.cf.colo, out }, 0);
+      }
       if (path.startsWith('/api/')) return json({ error: 'not found' }, 0, 404);
       if (path === '/' || path === '/index.html') return await cached(request, ctx, () => renderPage(request, env));
     } catch (e) {
