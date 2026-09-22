@@ -157,6 +157,10 @@ curl "http://localhost:8787/cdn-cgi/local/scheduled?cron=news"   # force a job: 
 Pushes to `main` auto-deploy via Cloudflare Workers Builds (`npx wrangler deploy`).
 Manual: `npm run deploy`.
 
+## Data-source spec
+
+`docs/DATA_SOURCES.md` — every upstream endpoint, identifier, field path, formula and caveat, verified by curl on 2026-09-22. Read it before touching `src/lib/markets.js`, `csv.js` or `rss.js`.
+
 ## Credits
 
 Portrait: Official White House portrait, June 2025 (photo: Daniel Torok) — public domain, 17 U.S.C. § 105.
