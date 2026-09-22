@@ -299,16 +299,18 @@ export default {
       if (path === '/api/_probe') {
         // TEMPORARY diagnostic (remove after use): what does Kalshi answer from this edge? Fixed URL set only.
         const PROBES = {
-          batch1: `${KALSHI}/markets?tickers=KXTRUMPOUT27-27-JAN2029`,
-          single: `${KALSHI}/markets/KXTRUMPOUT27-27-JAN2029`,
-          alt: 'https://api.kalshi.com/trade-api/v2/markets?tickers=KXTRUMPOUT27-27-JAN2029',
-          exch: `${KALSHI}/exchange/status`,
+          batch_bot: [`${KALSHI}/markets?tickers=KXTRUMPOUT27-27-JAN2029,KXTRUMPRESIGN`, UA],
+          batch_browser: [`${KALSHI}/markets?tickers=KXTRUMPOUT27-27-JAN2029,KXTRUMPRESIGN`, BROWSER_UA],
+          single_bot: [`${KALSHI}/markets/KXTRUMPRESIGN`, UA],
+          single_browser: [`${KALSHI}/markets/KXTRUMPREMOVE`, BROWSER_UA],
+          event_browser: [`${KALSHI}/markets?event_ticker=KXPRESPERSON-28&status=open&limit=200`, BROWSER_UA],
+          batch_noua: [`${KALSHI}/markets?tickers=KXAMEND25-29,KXIMPEACH-29-JAN20`, ''],
         };
         const out = {};
-        for (const [k, u] of Object.entries(PROBES)) {
+        for (const [k, [u, ua]] of Object.entries(PROBES)) {
           try {
-            const r = await fetch(u, { headers: { 'user-agent': k === 'single' ? BROWSER_UA : UA, accept: 'application/json' } });
-            out[k] = { status: r.status, headers: Object.fromEntries([...r.headers].filter(([h]) => /retry|cache|via|x-|cf-|server|date|content-type/i.test(h))), body: (await r.text()).slice(0, 400) };
+            const r = await fetch(u, { headers: { ...(ua ? { 'user-agent': ua } : {}), accept: 'application/json' } });
+            out[k] = { status: r.status, headers: Object.fromEntries([...r.headers].filter(([h]) => /retry|cache|via|x-|cf-|server|date|content-type/i.test(h))), body: (await r.text()).slice(0, 120) };
           } catch (e) { out[k] = { error: String(e) }; }
         }
         return json({ colo: request.cf && request.cf.colo, out }, 0);
