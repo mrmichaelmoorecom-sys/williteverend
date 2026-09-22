@@ -1,6 +1,6 @@
 # williteverend.com
 
-**Will it ever end?** — a one-page site. Official portrait, a giant **NO** (until it isn't),
+**Will it ever end?** — a one-page site. A giant **NO** (until it isn't),
 the days left in the term underneath, "chance it actually ends" from betting markets,
 the raw odds, the approval average and a Drudge-style news feed. One Cloudflare Worker,
 no framework, no build step.
@@ -20,7 +20,7 @@ src/lib/kalshiAuth.js optional Kalshi API-key request signing (inert without the
 src/lib/render.js    server-side HTML for every section + template fill
 .github/workflows/kalshi.yml  optional Kalshi relay (GitHub runner → KV `kalshi`); workflow_dispatch only until enabled
 public/index.html    template ({{placeholders}} filled by the Worker on every request)
-public/style.css, public/app.js, public/portrait.jpg, public/portrait-full.jpg
+public/style.css, public/app.js
 test/*.test.js       node --test, fixtures in test/fixtures/
 ```
 
@@ -163,5 +163,4 @@ Manual: `npm run deploy`.
 
 ## Credits
 
-Portrait: Official White House portrait, June 2025 (photo: Daniel Torok) — public domain, 17 U.S.C. § 105.
 Odds: Kalshi, Polymarket · Approval: NYT polling average, Silver Bulletin · News: Google News, The Guardian, Politico, The Hill.

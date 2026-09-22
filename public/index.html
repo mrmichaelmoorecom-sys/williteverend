@@ -10,13 +10,9 @@
 <meta property="og:title" content="Will it ever end?">
 <meta property="og:description" content="{{ogDescription}}">
 <meta property="og:url" content="{{origin}}/">
-<meta property="og:image" content="{{origin}}/portrait.jpg">
-<meta property="og:image:width" content="960">
-<meta property="og:image:height" content="1200">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Will it ever end?">
 <meta name="twitter:description" content="{{ogDescription}}">
-<meta name="twitter:image" content="{{origin}}/portrait.jpg">
 <meta name="theme-color" content="#ffffff">
 <link rel="canonical" href="{{origin}}/">
 <link rel="icon" href="{{favicon}}">
@@ -25,9 +21,6 @@
 <body class="answer-{{answerClass}}">
 
 <header class="hero">
-  <a class="portrait-link" href="{{portraitFull}}" title="Official portrait (full size)">
-    <img class="portrait" src="{{portrait}}" width="960" height="1200" alt="Official White House portrait of {{presidentName}}" fetchpriority="high">
-  </a>
   <h1 class="answer" id="answer" aria-live="polite">{{answer}}</h1>
   <p class="days" id="days" title="{{daysTitle}}">{{daysLine}}</p>
   <div class="banner" id="banner">
@@ -58,7 +51,6 @@
 </main>
 
 <footer>
-  <p>{{credit}}</p>
   <p>Odds: Kalshi, Polymarket · Approval: NYT, Silver Bulletin · News: Google News, Guardian, Politico, The Hill</p>
   <p>Updated <time id="updated" datetime="{{updatedIso}}">{{updatedRel}}</time> · term ends {{termEndHuman}} · <a href="/api/state">api</a></p>
   <p><a href="{{coffee}}" target="_blank" rel="noopener">buy me a coffee</a> · <a href="{{github}}" target="_blank" rel="noopener">GitHub</a></p>

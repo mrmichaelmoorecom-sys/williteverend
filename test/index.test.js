@@ -233,8 +233,8 @@ test('partial 200: a single missing Kalshi ticker is carried from the last good 
   assert.equal(snap.ends.inputs.p_noelect, null); assert.equal(snap.ends.pct, 97.9);
   assert.equal(snap.sources.kalshi.partial, true); assert.ok(snap.sources.kalshi.missing.includes('KXPRESELECTIONOCCUR-28'));
   assert.deepEqual(snap.sources.kalshi.carried, []);
-  assert.match(renderOdds(snap, NOW), /KXPRESELECTIONOCCUR-28.*those rows are omitted/);
-  // warm KV: the row is carried → 89.6% and the warning says so instead of "omitted"
+  assert.doesNotMatch(renderOdds(snap, NOW), /class="warn"/);
+  // warm KV: the row is carried → 89.6%
   const STATE = kv();
   calls = []; mockFetch(calls);
   const first = (await refresh({ STATE }, { now: NOW })).snap;
@@ -248,8 +248,7 @@ test('partial 200: a single missing Kalshi ticker is carried from the last good 
   assert.equal(row.carried, true); assert.equal(row.at, first.sources.kalshi.at);
   assert.equal(snap.markets.kalshi['KXTRUMPOUT27-27-JAN2029'].carried, false);
   const html = renderOdds(snap, NOW + 600e3);
-  assert.match(html, /Kalshi did not return 3 of the expected markets — showing last good values for KXPRESELECTIONOCCUR-28; KXTRUMPPRES-28, KXTRUMPAPPROVALBELOW-26DEC31-37 are omitted\./);
-  assert.doesNotMatch(html, /KXPRESELECTIONOCCUR-28[^;<]*omitted/);   // the carried id is never in the "omitted" clause
+  assert.doesNotMatch(html, /class="warn"/);   // a partial response is carried silently, not announced on the page
   // the carry chains across ticks (the row keeps its original fetch time)
   ({ snap } = await refresh({ STATE }, { schedule: true, now: NOW + 1200e3 }));
   assert.equal(snap.ends.pct, 89.6); assert.equal(snap.markets.kalshi['KXPRESELECTIONOCCUR-28'].at, first.sources.kalshi.at);

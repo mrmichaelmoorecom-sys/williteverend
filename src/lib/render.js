@@ -115,22 +115,9 @@ export function renderOdds(snap, now = Date.now()) {
   const src = snap.sources || {};
   const down = ['kalshi', 'polymarket'].filter((k) => src[k] && !src[k].ok);
   const at = down.length ? src[down[0]].at : null;
-  let warn = down.length ? `<p class="warn">${down.map((k) => VENUE_NAME[k]).join(' and ')} unavailable — showing last good values${at ? ` from <time datetime="${h(at)}">${h(relTime(at, now))}</time>` : ''}.</p>` : '';
-  // A 200 that omits some of the expected markets: the last good values are carried forward where there are
-  // any (`carried`), the rest of the rows are missing — say which.
-  for (const k of ['kalshi', 'polymarket']) {
-    const v = src[k];
-    if (v && v.ok && v.partial && Array.isArray(v.missing) && v.missing.length) {
-      const carried = Array.isArray(v.carried) ? v.carried : [];
-      if (!carried.length) { warn += `<p class="warn">${VENUE_NAME[k]} did not return ${v.missing.length} of the expected markets (${h(v.missing.join(', '))}) — those rows are omitted.</p>`; continue; }
-      // Polymarket's `missing` lists event slugs while `carried` lists market slugs, so once everything missing is
-      // covered nothing is omitted even if the ids differ.
-      const omitted = carried.length >= v.missing.length ? [] : v.missing.filter((id) => !carried.includes(id));
-      const parts = [`showing last good values for ${h(carried.join(', '))}`];
-      if (omitted.length) parts.push(`${h(omitted.join(', '))} ${omitted.length === 1 ? 'is' : 'are'} omitted`);
-      warn += `<p class="warn">${VENUE_NAME[k]} did not return ${v.missing.length} of the expected markets — ${parts.join('; ')}.</p>`;
-    }
-  }
+  // A partial response (a 200 that omits some expected markets) is not surfaced on the page: the carried-forward
+  // values stand on their own, and `sources[venue].partial/missing/carried` still says so in /api/state.
+  const warn = down.length ? `<p class="warn">${down.map((k) => VENUE_NAME[k]).join(' and ')} unavailable — showing last good values${at ? ` from <time datetime="${h(at)}">${h(relTime(at, now))}</time>` : ''}.</p>` : '';
   const anyRows = ['early', 'stays', 'election2028'].some((k) => g[k] && g[k].length);
   if (!anyRows) return `<p class="unavail">Odds unavailable right now.</p>`;
   return `${warn}${tableHtml('Leaves early', g.early, 'odds-early')}
@@ -186,8 +173,7 @@ export function pageVars({ snap, news, origin = '', now = Date.now() }) {
     updatedIso: h(snap.updatedAt || ''), updatedRel: h(relTime(snap.updatedAt, now)),
     newsUpdatedIso: h(newsAt || ''), newsUpdatedRel: h(newsAt ? relTime(newsAt, now) : ''),
     stateJson, ogDescription: h(desc), origin: h(origin), favicon: faviconSvg(answer),
-    presidentName: h(p.name || 'The President'), portrait: h(p.portrait || '/portrait.jpg'), portraitFull: h(p.portraitFull || '/portrait-full.jpg'),
-    credit: h(p.portraitCredit || ''), coffee: h((c.links || {}).coffee || '#'), github: h((c.links || {}).github || '#'),
+    coffee: h((c.links || {}).coffee || '#'), github: h((c.links || {}).github || '#'),
     termEndHuman: h(fmtDate(snap.termEnd)),
     verdictReason: h(snap.verdictReason || ''),
   };
