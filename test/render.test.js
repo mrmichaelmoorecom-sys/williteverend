@@ -32,7 +32,6 @@ test('template fill renders NO, 851 days, 89.6% / 23.5%, approval and news with 
   assert.match(html, /Trump &lt;b&gt;&amp;&lt;\/b&gt; friends/);
   assert.match(html, /href="https:\/\/x\.test\/a\?b=1&amp;c=2" target="_blank" rel="noopener"/);
   assert.match(html, /2h ago/);
-  assert.match(html, /og:image" content="https:\/\/williteverend\.com\/portrait\.jpg"/);
   assert.match(html, /<script type="application\/json" id="state">\{"updatedAt"/);
   assert.match(html, /embed\.polymarket\.com\/market\?market=trump-out-as-president-before-2027/);
   assert.match(html, /kalshi\.com\/markets\/kxtrumpout27\/x\/kxtrumpout27-27/);
@@ -95,13 +94,13 @@ test('graceful degradation: no odds / no approval / no news', () => {
   assert.match(vars.headline, /—/);
 });
 
-test('source-down warning (live relative time), partial warning and venue-only tag', () => {
+test('source-down warning (live relative time), no partial warning and venue-only tag', () => {
   const s = snap();
   s.sources.kalshi = { ok: false, at: '2026-09-21T10:00:00Z', error: 'x' };
   assert.match(renderOdds(s, NOW), /Kalshi unavailable — showing last good values from <time datetime="2026-09-21T10:00:00Z">21h ago<\/time>\./);
+  // A partial 200 is tracked in the snapshot but never shown on the page.
   s.sources.kalshi = { ok: true, at: '2026-09-22T06:00:00Z', partial: true, missing: ['KXTRUMPPRES-28', 'KXTRUMPAPPROVALBELOW-26DEC31-37'] };
-  assert.match(renderOdds(s, NOW), /Kalshi did not return 2 of the expected markets \(KXTRUMPPRES-28, KXTRUMPAPPROVALBELOW-26DEC31-37\)/);
-  assert.doesNotMatch(renderOdds(s, NOW), /unavailable — showing/);
+  assert.doesNotMatch(renderOdds(s, NOW), /class="warn"/);
   s.sources.kalshi = { ok: true, at: 'x', partial: false, missing: [] };
   assert.doesNotMatch(renderOdds(s, NOW), /class="warn"/);
   const only = buildSnapshot({ now: NOW, config, polymarket: { ok: true, markets: s.markets.polymarket } });

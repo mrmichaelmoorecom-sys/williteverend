@@ -39,17 +39,8 @@ img { max-width: 100%; height: auto; }
   padding: 24px 0 32px;
   border-bottom: 1px solid var(--rule);
 }
-.portrait-link { display: block; line-height: 0; }
-/* Portrait and answer are capped by viewport HEIGHT too (svh), so the portrait + NO + countdown + banner all fit
+/* The answer is capped by viewport HEIGHT too (svh), so NO + countdown + banner all fit
    the first viewport on laptop screens (1280x720 / 1366x768 / 1440x800), not just on tall windows. */
-.portrait {
-  width: clamp(120px, min(24vw, 22svh), 220px);
-  height: auto;
-  aspect-ratio: 4 / 5;
-  object-fit: cover;
-  object-position: top;
-  border: 1px solid var(--rule);
-}
 .answer {
   font-family: var(--serif);
   font-weight: 700;
