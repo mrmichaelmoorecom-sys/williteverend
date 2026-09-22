@@ -44,7 +44,7 @@ const heavyCalls = (calls) => calls.filter((u) => HEAVY.some((h) => u.includes(h
 
 const worker = await import('../src/index.js');
 const { refresh } = worker;
-worker.tuning.retryDelayMs = () => 0;   // the 2–4 s production backoff would only slow the suite
+worker.tuning.retryDelayMs = () => 0; worker.tuning.singlesGapMs = () => 0; worker.tuning.singlesBackoffMs = () => 0;   // the 2–4 s production backoff would only slow the suite
 
 test('cold start (empty KV): light refresh only — no approval/news/2028 fetches — and snapshot is written', async () => {
   const calls = []; mockFetch(calls);
@@ -270,11 +270,12 @@ test('Kalshi 429: batch → per-ticker singles → KV relay → previous map', a
   const first = (await refresh({ STATE }, { now: NOW })).snap;
   const batch = JSON.parse(fx('k_batch.json'));
   const single = (u) => { const t = u.split('/markets/')[1]; const m = batch.markets.find((x) => x.ticker === t); return m ? new Response(JSON.stringify({ market: m }), { status: 200 }) : new Response('{"error":{"code":"not_found"}}', { status: 404 }); };
-  // batch 429 (not retried — it is a known-persistent throttle) → 18 singles → ok, via 'singles', same headline
+  // batch 429 (not retried — it is a known-persistent throttle) → 18 sequential singles (the 2 tickers absent
+  // from the fixture 404 and are retried once each = 20 calls) → ok, via 'singles', same headline
   calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('rate limited', { status: 429 }), '/trade-api/v2/markets/KX': single });
   let { snap } = await refresh({ STATE }, { schedule: true, now: NOW + 600e3 });
   assert.equal(calls.filter((u) => u.includes('/markets?tickers=')).length, 1);
-  assert.equal(calls.filter((u) => /\/trade-api\/v2\/markets\/KX/.test(u)).length, 18);
+  assert.equal(calls.filter((u) => /\/trade-api\/v2\/markets\/KX/.test(u)).length, 20);
   assert.equal(snap.sources.kalshi.ok, true); assert.equal(snap.sources.kalshi.via, 'singles'); assert.equal(snap.sources.kalshi.error, null);
   assert.equal(snap.ends.pct, 89.6); assert.equal(Object.keys(snap.markets.kalshi).length, 16);
   // singles partially missing (2 tickers 404) → still ok, warning names them, the 2 rows are carried from before

@@ -29,7 +29,7 @@ const EMPTY_NEWS = { updatedAt: null, items: [] };
 // credential only the owner can create — an API key (secrets KALSHI_KEY_ID + KALSHI_PRIVATE_KEY → signed
 // requests, see src/lib/kalshiAuth.js) or the GitHub Actions relay (.github/workflows/kalshi.yml → KV `kalshi`,
 // read below when the direct call fails). Both paths are inert until configured. See README "Kalshi and 429s".
-export const tuning = { retries: 2, retryDelayMs: () => 2000 + Math.random() * 2000, relayMaxAgeMs: 45 * 60e3 };
+export const tuning = { retries: 2, retryDelayMs: () => 2000 + Math.random() * 2000, singlesGapMs: () => 120, singlesBackoffMs: () => 1000, relayMaxAgeMs: 45 * 60e3 };
 const RELAY_KEY = 'kalshi';
 
 // Security headers for the rendered page. connect-src must gain https://clob.polymarket.com and
@@ -105,10 +105,20 @@ async function readRelay(env, now) {
  * then one request per ticker in parallel (18 subrequests, no retries), then the relay, then the previous map.
  */
 const fetchKalshiSingles = async (env) => {
-  const results = await Promise.allSettled(KALSHI_TICKERS.map((t) => getJson(`${KALSHI}/markets/${t}`, { ...kalshiOpts(env), retries: 0 })));
-  const markets = results.filter((r) => r.status === 'fulfilled' && r.value && r.value.market).map((r) => r.value.market);
-  const firstErr = results.find((r) => r.status === 'rejected');
-  if (!markets.length) throw new Error(firstErr ? reason(firstErr.reason) : 'no markets');
+  // Sequential on purpose: 18 concurrent singles from one shared egress IP trip the same per-IP limiter
+  // (3/18 came back in production); spaced out they all pass. Wall clock only, ~3–6 s, no CPU cost.
+  const markets = [];
+  let firstErr = null;
+  for (const t of KALSHI_TICKERS) {
+    let j = null;
+    for (let i = 0; i < 2 && !j; i++) {
+      try { j = await getJson(`${KALSHI}/markets/${t}`, { ...kalshiOpts(env), retries: 0 }); }
+      catch (e) { firstErr = firstErr || e; if (i === 0 && /HTTP 429/.test(reason(e))) await sleep(tuning.singlesBackoffMs()); }
+    }
+    if (j && j.market) markets.push(j.market);
+    await sleep(tuning.singlesGapMs());
+  }
+  if (!markets.length) throw new Error(firstErr ? reason(firstErr) : 'no markets');
   const out = kalshiBatch({ markets });
   return { ...out, via: 'singles' };   // `missing` already surfaces as sources.kalshi.partial, same as the batch path
 };
