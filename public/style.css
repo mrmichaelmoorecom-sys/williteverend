@@ -60,7 +60,7 @@ img { max-width: 100%; height: auto; }
   max-width: 100%;
   overflow-wrap: normal;
 }
-.answer-yes .answer { letter-spacing: -0.06em; font-size: clamp(5rem, min(30vw, 48svh), 20rem); }
+.answer-yes .answer { letter-spacing: 0.02em; font-size: clamp(5rem, min(30vw, 48svh), 20rem); }   /* Georgia Bold "YES": at −0.06em the Y/E and E/S serifs overlap, at 0 they still touch; +0.02em separates them and still fits at every width */
 .days {
   font-family: var(--mono);
   font-size: clamp(1rem, 2.2vw, 1.25rem);

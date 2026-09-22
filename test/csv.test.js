@@ -29,5 +29,6 @@ test('Silver Bulletin dataset.csv → last row, M/D/YYYY → ISO', () => {
 test('Datawrapper resolver: capture the version group (chart id contains a digit)', () => {
   const html = '<!DOCTYPE html><html><head><meta http-equiv="REFRESH" content="0; url=https://datawrapper.dwcdn.net/kSCt4/7832/"></head></html>';
   assert.equal(parseDatawrapperVersion(html, 'kSCt4'), '7832');
+  assert.equal(parseDatawrapperVersion(fx('dw_resolver.html'), 'kSCt4'), '7832');   // the real 245-byte resolver body
   assert.throws(() => parseDatawrapperVersion('<html></html>', 'kSCt4'));
 });

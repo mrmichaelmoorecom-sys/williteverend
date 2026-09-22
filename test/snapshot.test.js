@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket, parseKalshi2028, parsePolymarket2028 } from '../src/lib/markets.js';
-import { computeEnds, computeEarly, computeVerdict, computeApproval, buildSnapshot, buildGroups, venueMean, mergeElection2028, K, PM } from '../src/lib/snapshot.js';
+import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket, parseKalshi2028, parsePolymarket2028, kalshiRow } from '../src/lib/markets.js';
+import { computeEnds, computeEarly, computeVerdict, computeApproval, buildSnapshot, buildGroups, venueMean, mergeElection2028, mergeVenues, nameKey, UMBRELLA_UNCONFIRMED, K, PM } from '../src/lib/snapshot.js';
+import { daysLine } from '../src/lib/render.js';
 
 const fx = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8'));
 const NOW = Date.parse('2026-09-22T06:30:00Z');
@@ -30,6 +31,16 @@ test('§1.6 headline with the spec numbers → 89.6%', () => {
 test('§1.6 headline from the live fixtures also → 89.6%', () => {
   const e = computeEnds(live());
   assert.equal(e.pct, 89.6);
+});
+
+test('§1.6 after KXPRESELECTIONOCCUR-28 settles YES: p_noelect is exactly 0, not 1 − last trade', () => {
+  const l = live();
+  const raw = fx('k_batch.json').markets.find((m) => m.ticker === K.OCCUR2028);
+  const settled = kalshiRow({ ...raw, status: 'finalized', result: 'yes', yes_bid_dollars: '0.0000', yes_ask_dollars: '1.0000' });   // last stays 0.928
+  const e = computeEnds({ kalshi: { ...l.kalshi, [K.OCCUR2028]: settled }, polymarket: l.polymarket });
+  assert.equal(e.inputs.p_noelect, 0);
+  assert.equal(e.pct, Math.round((1 - e.inputs.p_win2028) * 1000) / 10);
+  assert.equal(e.pct, 97.9);
 });
 
 test('§1.6 fallbacks: Kalshi down → 98.6% (Polymarket only); Polymarket down → 89.0% (Kalshi only); both down → null', () => {
@@ -90,6 +101,43 @@ test('§1.8 verdict: Kalshi finalized YES on umbrella/remove/resign flips; AMEND
   assert.equal(computeVerdict({ now: NOW, ...no }).verdict, 'NO');
 });
 
+test('§1.8 umbrella-only settlement is YES but unconfirmed (no endedAt, countdown keeps running); an act confirms it', () => {
+  const l = live();
+  const fin = (k, t) => ({ ...k, [t]: { ...k[t], status: 'finalized', result: 'yes' } });
+  const now = Date.parse('2027-03-01T15:10:00Z');
+  const config = { termEnd: '2029-01-20T17:00:00Z' };
+  // umbrella finalized/yes, RESIGN + REMOVE still active
+  const kalshi = fin(l.kalshi, K.OUT_JAN2029);
+  assert.equal(kalshi[K.RESIGN].status, 'active'); assert.equal(kalshi[K.REMOVE].status, 'active');
+  const v = computeVerdict({ now, ...l, kalshi });
+  assert.deepEqual(v, { verdict: 'YES', confirmed: false, endedAt: null, reason: UMBRELLA_UNCONFIRMED });
+  const s1 = buildSnapshot({ now, config, kalshi: { ok: true, markets: kalshi }, polymarket: { ok: true, markets: l.polymarket } });
+  assert.equal(s1.verdict, 'YES'); assert.equal(s1.confirmed, false); assert.equal(s1.endedAt, null);
+  assert.match(daysLine(s1, now).text, /days left$/);
+  // six months later KXTRUMPRESIGN settles: confirmed, endedAt = the resign market's settlement time, "It ended"
+  const later = now + 180 * 86400e3;
+  const k2 = fin(kalshi, K.RESIGN); k2[K.RESIGN].updatedAt = new Date(later - 3600e3).toISOString();
+  const s2 = buildSnapshot({ now: later, config, prev: s1, kalshi: { ok: true, markets: k2 }, polymarket: { ok: true, markets: l.polymarket } });
+  assert.equal(s2.verdict, 'YES'); assert.equal(s2.confirmed, true);
+  assert.equal(s2.endedAt, new Date(later - 3600e3).toISOString());
+  assert.equal(s2.verdictReason, `Kalshi ${K.RESIGN} settled YES`);
+  assert.match(daysLine(s2, later).text, /^It ended /);
+  // without an updatedAt the confirming cron time is used; then it sticks, even past the scheduled term end
+  const k3 = fin(kalshi, K.RESIGN); delete k3[K.RESIGN].updatedAt;
+  const s3 = buildSnapshot({ now: later, config, prev: s1, kalshi: { ok: true, markets: k3 }, polymarket: { ok: true, markets: l.polymarket } });
+  assert.equal(s3.endedAt, new Date(later).toISOString());
+  const s4 = buildSnapshot({ now: Date.parse('2029-02-01T00:00:00Z'), config, prev: s3, kalshi: { ok: true, markets: k3 }, polymarket: { ok: true, markets: l.polymarket } });
+  assert.equal(s4.endedAt, s3.endedAt); assert.equal(s4.verdictReason, s3.verdictReason);
+  // act-based triggers win over the umbrella in the reason string even when both are finalized
+  assert.equal(computeVerdict({ now, ...l, kalshi: fin(kalshi, K.REMOVE) }).reason, `Kalshi ${K.REMOVE} settled YES`);
+  // every other YES path is confirmed
+  for (const args of [{ now: Date.parse('2029-01-20T17:00:00Z'), ...l }, { now, ...l, kvOverride: 'YES' }, { now, ...l, override: 'YES' },
+    { now, ...l, polymarket: { ...l.polymarket, [PM.OUT_2027]: { ...l.polymarket[PM.OUT_2027], closed: true, resolvedYes: true } } }]) {
+    const r = computeVerdict(args); assert.equal(r.verdict, 'YES'); assert.equal(r.confirmed, true); assert.ok(r.endedAt);
+  }
+  assert.equal(computeVerdict({ now: NOW, ...l }).confirmed, false);
+});
+
 test('§1.8 verdict: Polymarket closed at 1 flips (before-2027 or the monthly market); closed at 0 does not', () => {
   const l = live();
   const yes = { ...l, polymarket: { ...l.polymarket, [PM.OUT_2027]: { ...l.polymarket[PM.OUT_2027], closed: true, resolvedYes: true } } };
@@ -128,6 +176,15 @@ test('buildGroups: rows carry label/pct/venue/link/thin; derived not-occur row; 
   assert.equal(primary.id, K.OUT_JAN2029); assert.equal(primary.pct, 23.5); assert.equal(primary.venue, 'Kalshi');
   const notOccur = g.stays.find((r) => r.id === K.OCCUR2028);
   assert.equal(notOccur.pct, 8.3); assert.equal(notOccur.label, '2028 election does not occur');
+  // same question on both venues → ONE row whose Yes is the cross-venue mean the headline uses (§1.6)
+  assert.equal(new Set(g.stays.map((r) => r.label)).size, g.stays.length);
+  const win = g.stays.find((r) => r.label === 'Trump wins the 2028 election');
+  assert.equal(win.byVenue.Kalshi.pct, 2.7); assert.equal(win.byVenue.Polymarket.pct, 1.5);
+  assert.equal(win.pct, 2.1); assert.equal(win.venue, 'Kalshi + Polymarket');
+  assert.equal(win.pct, Math.round(computeEnds(live()).inputs.p_win2028 * 1000) / 10);
+  const nom = g.stays.find((r) => r.label === 'Trump is the 2028 GOP nominee');
+  assert.equal(nom.byVenue.Kalshi.pct, 2.5); assert.equal(nom.byVenue.Polymarket.pct, 2.1); assert.equal(nom.pct, 2.3);
+  assert.deepEqual(g.stays.slice(0, 3).map((r) => r.label), ['Trump wins the 2028 election', '2028 election does not occur', 'Trump is the 2028 GOP nominee']);
   assert.ok(g.stays.find((r) => r.id === K.RUN2028).thin);
   assert.equal(g.approval.length, 1);   // KXTRUMPAPPROVALBELOW-26DEC31-37 isn't in the batch fixture; PM hit-35 is
   assert.ok(g.election2028.find((r) => r.id === K.PARTY_D));
@@ -209,11 +266,55 @@ test('mergeElection2028: one row per person across venues, mean price, per-venue
   assert.deepEqual(mergeElection2028(null, null), []);
 });
 
+test('mergeVenues: both venues, one thin, one missing, none', () => {
+  const k = { label: 'x', prob: 0.027, venue: 'Kalshi', id: 'K', link: 'https://kalshi.com/k', volume: 100, thin: false };
+  const p = { label: 'x', prob: 0.0145, venue: 'Polymarket', id: 'p', link: 'https://polymarket.com/p', volume: 50, thin: false };
+  const both = mergeVenues('Q', [k, p]);
+  assert.equal(both.pct, 2.1); assert.equal(both.prob, 0.0208); assert.equal(both.venue, 'Kalshi + Polymarket'); assert.equal(both.id, 'K|p');
+  assert.deepEqual(both.venues, ['Kalshi', 'Polymarket']); assert.equal(both.volume, 150); assert.equal(both.label, 'Q'); assert.equal(both.thin, false);
+  assert.deepEqual(Object.keys(both.byVenue), ['Kalshi', 'Polymarket']); assert.equal(both.byVenue.Polymarket.pct, 1.5);
+  const thin = mergeVenues('Q', [k, { ...p, prob: 0.5, thin: true }]);
+  assert.equal(thin.pct, 2.7); assert.deepEqual(thin.venues, ['Kalshi']); assert.equal(thin.byVenue.Polymarket.thin, true); assert.equal(thin.thin, false);
+  const one = mergeVenues('Q', [k, null]);
+  assert.equal(one.venue, 'Kalshi'); assert.equal(one.pct, 2.7); assert.deepEqual(Object.keys(one.byVenue), ['Kalshi']);
+  assert.equal(mergeVenues('Q', [null, undefined]), null);
+  assert.equal(mergeVenues('Q', [{ ...k, prob: null }]), null);
+  assert.equal(mergeVenues('Q', [k], { note: 'n' }).note, 'n');
+});
+
+test('nameKey: dots removed before lone initials are dropped, so venue spellings of one person collide', () => {
+  assert.equal(nameKey('J.D. Vance'), 'jdvance'); assert.equal(nameKey('JD Vance'), 'jdvance');
+  assert.equal(nameKey('Donald J. Trump'), 'donaldtrump'); assert.equal(nameKey('Donald Trump'), 'donaldtrump');
+  assert.equal(nameKey('Donald J. Trump Jr.'), 'donaldtrumpjr'); assert.equal(nameKey('Donald Trump Jr.'), 'donaldtrumpjr');
+  assert.equal(nameKey('Stephen A. Smith'), 'stephensmith'); assert.equal(nameKey('J.B. Pritzker'), 'jbpritzker'); assert.equal(nameKey('JB Pritzker'), 'jbpritzker');
+  assert.equal(nameKey('Alexandria Ocasio-Cortez'), 'alexandriaocasiocortez');
+  assert.notEqual(nameKey('Donald J. Trump'), nameKey('Donald Trump Jr.'));
+  assert.equal(nameKey('A'), 'a'); assert.equal(nameKey(''), '');
+});
+
+test('mergeElection2028 merges BEFORE truncating: a person outside one venue\'s top 8 still shows both prices', () => {
+  const rows = mergeElection2028(parseKalshi2028(fx('k2028.json'), 20), parsePolymarket2028(fx('pm_ev2028.json'), 20), 8);
+  assert.equal(rows.length, 8);
+  const shapiro = rows.find((r) => r.label === 'Josh Shapiro');   // 11th on Kalshi (0.0265), 7th on Polymarket (0.0305)
+  assert.ok(shapiro, 'Shapiro in the merged top 8');
+  assert.deepEqual(Object.keys(shapiro.byVenue), ['Kalshi', 'Polymarket']);
+  assert.equal(shapiro.pct, 2.8);
+  // "Donald J. Trump" (Kalshi) and "Donald Trump" (Polymarket) are one row
+  const kr = (label, prob) => ({ label, prob, venue: 'Kalshi', thin: false, id: 'K', link: 'k', volume: 1 });
+  const pr = (label, prob) => ({ label, prob, venue: 'Polymarket', thin: false, id: 'p', link: 'p', volume: 1 });
+  const t = mergeElection2028([kr('Donald J. Trump', 0.027)], [pr('Donald Trump', 0.0145)]);
+  assert.equal(t.length, 1); assert.equal(t[0].label, 'Donald J. Trump'); assert.equal(t[0].pct, 2.1);
+  assert.deepEqual(Object.keys(t[0].byVenue), ['Kalshi', 'Polymarket']);
+  // the deeper lists really do merge someone the 8-deep lists would not
+  const shallow = mergeElection2028(parseKalshi2028(fx('k2028.json'), 8), parsePolymarket2028(fx('pm_ev2028.json'), 8), 8).find((r) => r.label === 'Josh Shapiro');
+  assert.deepEqual(Object.keys(shallow.byVenue), ['Polymarket']);
+});
+
 test('buildGroups merges the live 2028 fixtures: no person twice, party rows still appended', () => {
-  const e = { kalshi: parseKalshi2028(fx('k2028.json'), 8), polymarket: parsePolymarket2028(fx('pm_ev2028.json'), 8) };
+  const e = { kalshi: parseKalshi2028(fx('k2028.json'), 20), polymarket: parsePolymarket2028(fx('pm_ev2028.json'), 20) };
   const g = buildGroups({ ...live(), election2028: e });
   const people = g.election2028.filter((r) => r.byVenue);
-  const keys = people.map((r) => r.label.toLowerCase().replace(/[^a-z]/g, ''));
+  const keys = people.map((r) => nameKey(r.label));
   assert.equal(new Set(keys).size, keys.length);
   assert.ok(people.length <= 8 && people.length >= 5);
   assert.ok(people.some((r) => Object.keys(r.byVenue).length === 2), 'at least one person priced on both venues');

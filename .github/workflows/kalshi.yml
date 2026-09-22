@@ -1,0 +1,59 @@
+# Kalshi relay: fetch the Worker's Kalshi calls from a GitHub runner (a different egress than Cloudflare's shared
+# pool, which Kalshi answers with HTTP 429) and store them in Workers KV key `kalshi`. The Worker reads that key
+# only when its own direct call fails and only while it is younger than 45 minutes (src/index.js readRelay()).
+#
+# INERT UNTIL CONFIGURED — see README "Kalshi and 429s":
+#   1. GitHub secrets CF_KV_TOKEN (Cloudflare API token, "Workers KV Storage: Edit", this account only)
+#      and CF_ACCOUNT_ID.
+#   2. Run it once by hand (workflow_dispatch) and confirm the log shows HTTP 200 from Kalshi.
+#   3. Then uncomment the `schedule:` block. Every 15 min ≈ 96 runs/day; on a PRIVATE repo each run bills ≥1
+#      minute, so keep it at 15 min or slower to stay inside the 2,000 free minutes/month.
+name: Kalshi relay
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '*/15 * * * *'
+permissions: {}
+concurrency: kalshi-relay
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      CF_KV_TOKEN: ${{ secrets.CF_KV_TOKEN }}
+      CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      KV_NAMESPACE_ID: 701133a398414aaa81b191a2660ac351
+      KALSHI: https://api.elections.kalshi.com/trade-api/v2
+      TICKERS: KXTRUMPOUT27-27-JAN2029,KXTRUMPOUT27-27-28,KXTRUMPOUT27-27-DJT,KXTRUMPREMOVE,KXTRUMPRESIGN,KXIMPEACH-29-JAN20,KXIMPEACH-28-JAN01,KXAMEND25-29,KXPRESPERSON-28-DTRU,KXPRESNOMR-28-DJT,KXTRUMPRUN-28NOV07,KXPRESELECTIONOCCUR-28,KXPRESPARTY-2028-D,KXPRESPARTY-2028-R,KXMARTIAL-29JAN20,KXINSURRECTION-29,KXTRUMPPRES-28,KXTRUMPAPPROVALBELOW-26DEC31-37
+      UA: Mozilla/5.0 (compatible; williteverend/1.0; +https://williteverend.com)
+    steps:
+      - name: Check secrets
+        run: |
+          if [ -z "$CF_KV_TOKEN" ] || [ -z "$CF_ACCOUNT_ID" ]; then
+            echo "CF_KV_TOKEN / CF_ACCOUNT_ID not set — nothing to do (see README 'Kalshi and 429s')."; exit 0
+          fi
+          echo "configured=1" >> "$GITHUB_ENV"
+      - name: Fetch Kalshi (batch + KXPRESPERSON-28)
+        if: env.configured == '1'
+        run: |
+          set -euo pipefail
+          # No Origin header (Kalshi 403s foreign origins); fail the job on anything but 200 so the KV key is never overwritten with junk.
+          curl -sS --fail-with-body -A "$UA" -H 'accept: */*' -o batch.json -w 'batch HTTP %{http_code}\n' "$KALSHI/markets?tickers=$TICKERS"
+          curl -sS --fail-with-body -A "$UA" -H 'accept: */*' -o election2028.json -w 'election2028 HTTP %{http_code}\n' "$KALSHI/markets?event_ticker=KXPRESPERSON-28&status=open&limit=200"
+          python3 - <<'PY'
+          import json, datetime
+          batch = json.load(open('batch.json')); e28 = json.load(open('election2028.json'))
+          n = len(batch.get('markets') or []); m = len(e28.get('markets') or [])
+          print(f'batch markets: {n}, election2028 markets: {m}')
+          assert n >= 9, 'fewer than half the expected tickers'
+          doc = {'fetchedAt': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), 'batch': batch, 'election2028': e28}
+          json.dump(doc, open('kalshi.json', 'w'), separators=(',', ':'))
+          PY
+      - name: Write KV key `kalshi`
+        if: env.configured == '1'
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -X PUT \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/storage/kv/namespaces/$KV_NAMESPACE_ID/values/kalshi" \
+            -H "Authorization: Bearer $CF_KV_TOKEN" -H 'content-type: application/json' \
+            --data-binary @kalshi.json -w '\nKV PUT HTTP %{http_code}\n'

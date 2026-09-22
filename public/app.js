@@ -23,9 +23,10 @@
   function renderCountdown() {
     var el = document.getElementById('days'); if (!el) return;
     var now = Date.now();
-    if (state.verdict === 'YES') {
-      var ended = state.endedAt && Date.parse(state.endedAt) <= now;
-      el.textContent = ended ? 'It ended ' + fmtDate(state.endedAt) : '0 days left';
+    // A YES with a confirmed endedAt reads "It ended <date>"; an unconfirmed YES (Kalshi's umbrella market also
+    // settles on an announced departure) keeps the countdown running until an act confirms the exit.
+    if (state.verdict === 'YES' && state.endedAt && Date.parse(state.endedAt) <= now) {
+      el.textContent = 'It ended ' + fmtDate(state.endedAt);
       return;
     }
     var ms = termEnd - now;
@@ -47,6 +48,7 @@
   function endedLabel(reason) {
     reason = String(reason || '');
     if (/term ended on schedule/.test(reason)) return 'The term ended on schedule.';
+    if (/^Kalshi .* settled YES \(unconfirmed/.test(reason)) return 'Kalshi\u2019s "leaves office" market settled YES \u2014 it also pays out on an announced departure within a year.';
     if (/^Kalshi .* settled YES$/.test(reason)) return 'Kalshi\u2019s "leaves office" market settled YES.';
     if (/^Polymarket .* resolved YES$/.test(reason)) return 'Polymarket\u2019s "out as President" market resolved YES.';
     return 'Marked as ended.';
@@ -89,7 +91,7 @@
     if (!window.fetch) return;
     fetch('/api/state', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (s) {
       if (!s) return;
-      applyState({ verdict: s.verdict, verdictReason: s.verdictReason, termEnd: s.termEnd, endedAt: s.endedAt, ends: s.ends, early: s.early, updatedAt: s.updatedAt, stale: s.stale });
+      applyState({ verdict: s.verdict, verdictReason: s.verdictReason, termEnd: s.termEnd, endedAt: s.endedAt, confirmed: s.confirmed, ends: s.ends, early: s.early, updatedAt: s.updatedAt, stale: s.stale });
     }).catch(function () { /* keep server-rendered values */ });
   }
 

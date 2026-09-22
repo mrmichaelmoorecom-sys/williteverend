@@ -23,10 +23,27 @@ test('Kalshi batch: dollar strings → mid, thin flag by spread, links, status/r
   assert.equal(k['KXTRUMPRESIGN'].link, 'https://kalshi.com/markets/kxtrumpresign/x/kxtrumpresign');
 });
 
-test('Kalshi single-market shape and missing prices', () => {
+test('Kalshi single-market shape and missing prices; a settled market prices at its payout, not its last trade', () => {
   const k = parseKalshiBatch({ market: { ticker: 'X', event_ticker: 'X-1', last_price_dollars: '0.5000', status: 'finalized', result: 'yes' } });
-  assert.equal(k.X.prob, 0.5); assert.equal(k.X.closed, true); assert.equal(k.X.result, 'yes');
+  assert.equal(k.X.prob, 1); assert.equal(k.X.closed, true); assert.equal(k.X.result, 'yes'); assert.equal(k.X.thin, false);
+  assert.equal(parseKalshiBatch({ market: { ticker: 'Y', last_price_dollars: '0.5000', status: 'active', result: '' } }).Y.prob, 0.5);
   assert.throws(() => parseKalshiBatch({}), /no markets/);
+});
+
+test('Kalshi settled shape (real finalized sibling): bid 0 / ask 1 / last 0.003 / result "no" → 0%, closed, not thin', () => {
+  const fixture = fx('k_settled_no.json');
+  const no = parseKalshiBatch(fixture)['KXTRUMPOUT27-27-26AUG01'];
+  assert.equal(no.prob, 0); assert.equal(no.thin, false); assert.equal(no.closed, true); assert.equal(no.result, 'no');
+  assert.equal(no.last, 0.003); assert.equal(no.bid, 0); assert.equal(no.ask, 1);
+  assert.equal(no.updatedAt, fixture.market.updated_time);
+  const yes = parseKalshiBatch({ market: { ...fixture.market, result: 'yes', last_price_dollars: '0.9700' } })['KXTRUMPOUT27-27-26AUG01'];
+  assert.equal(yes.prob, 1); assert.equal(yes.thin, false); assert.equal(yes.closed, true);
+  // the intermediate "determined" status (result populated, not yet finalized) is settled too
+  const det = parseKalshiBatch({ market: { ...fixture.market, status: 'determined', result: 'yes' } })['KXTRUMPOUT27-27-26AUG01'];
+  assert.equal(det.prob, 1); assert.equal(det.closed, true);
+  // an open market with an empty book still falls back to last
+  const open = parseKalshiBatch({ market: { ...fixture.market, status: 'active', result: '' } })['KXTRUMPOUT27-27-26AUG01'];
+  assert.equal(open.prob, 0.003); assert.equal(open.closed, false); assert.equal(open.thin, true);
 });
 
 test('a 200 with an empty market list is a failure, never an empty success', () => {

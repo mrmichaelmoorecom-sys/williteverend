@@ -19,17 +19,22 @@ export function kalshiLink(m) {
 /** Normalize one Kalshi market object. */
 export function kalshiRow(m) {
   const bid = num(m.yes_bid_dollars), ask = num(m.yes_ask_dollars), last = num(m.last_price_dollars);
-  let prob = bid != null && ask != null ? (bid + ask) / 2 : last;
-  if (prob != null && bid === 0 && ask === 1) prob = last ?? prob;   // empty book
+  // Settlement is keyed on `result` ("" while open, "yes"/"no" once determined/finalized): a settled market's
+  // book is 0/1 and `last` is the pre-close trade, never the settlement, so the price is the payout itself.
+  const res = String(m.result || '').toLowerCase();
+  const settled = res === 'yes' || res === 'no';
+  let prob = settled ? (res === 'yes' ? 1 : 0) : (bid != null && ask != null ? (bid + ask) / 2 : last);
+  if (!settled && prob != null && bid === 0 && ask === 1) prob = last ?? prob;   // empty book
   const spread = bid != null && ask != null ? ask - bid : null;
   return {
     id: m.ticker, venue: 'Kalshi', title: m.title || '', sub: m.yes_sub_title || '',
     prob: round4(prob), bid, ask, last, spread: round4(spread),
     volume: num(m.volume_fp), liquidity: num(m.liquidity_dollars),
     endDate: m.close_time || null,
-    thin: spread == null || spread > KALSHI_THIN_SPREAD,
+    thin: !settled && (spread == null || spread > KALSHI_THIN_SPREAD),
     link: kalshiLink(m), embed: null,
-    status: m.status || null, result: m.result || '', closed: m.status === 'finalized' || m.status === 'settled',
+    status: m.status || null, result: m.result || '', closed: settled || m.status === 'finalized' || m.status === 'settled',
+    updatedAt: m.updated_time || null,   // bumped on settlement: the best available "ended at" for a finalized YES
   };
 }
 

@@ -37,11 +37,15 @@ export function fmtDate(iso) {
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
 }
 
-/** Days-left line + title (also computed client-side; this is the no-JS seed). */
+/**
+ * Days-left line + title (also computed client-side; this is the no-JS seed). A YES with a confirmed endedAt
+ * reads "It ended <date>"; a YES without one (the Kalshi umbrella settles on an announced departure too)
+ * keeps the live countdown running until an act confirms the exit.
+ */
 export function daysLine(snap, now = Date.now()) {
   const end = Date.parse(snap.termEnd);
-  if (snap.verdict === 'YES') {
-    return { text: snap.endedAt && Date.parse(snap.endedAt) <= now ? `It ended ${fmtDate(snap.endedAt)}` : '0 days left', title: `Term end: ${fmtDate(snap.termEnd)}, noon ET` };
+  if (snap.verdict === 'YES' && snap.endedAt && Date.parse(snap.endedAt) <= now) {
+    return { text: `It ended ${fmtDate(snap.endedAt)}`, title: `Term end: ${fmtDate(snap.termEnd)}, noon ET` };
   }
   const d = Math.max(0, Math.floor((end - now) / 86400e3));
   return { text: `${d.toLocaleString('en-US')} day${d === 1 ? '' : 's'} left`, title: `Term ends ${fmtDate(snap.termEnd)} at noon ET (${snap.termEnd})` };
@@ -56,6 +60,7 @@ function venueTag(venues) {
 export function endedLabel(snap) {
   const r = String((snap && snap.verdictReason) || '');
   if (/term ended on schedule/.test(r)) return 'The term ended on schedule.';
+  if (/^Kalshi .* settled YES \(unconfirmed/.test(r)) return 'Kalshi\u2019s "leaves office" market settled YES \u2014 it also pays out on an announced departure within a year.';
   if (/^Kalshi .* settled YES$/.test(r)) return 'Kalshi\u2019s "leaves office" market settled YES.';
   if (/^Polymarket .* resolved YES$/.test(r)) return 'Polymarket\u2019s "out as President" market resolved YES.';
   return 'Marked as ended.';
@@ -111,11 +116,19 @@ export function renderOdds(snap, now = Date.now()) {
   const down = ['kalshi', 'polymarket'].filter((k) => src[k] && !src[k].ok);
   const at = down.length ? src[down[0]].at : null;
   let warn = down.length ? `<p class="warn">${down.map((k) => VENUE_NAME[k]).join(' and ')} unavailable — showing last good values${at ? ` from <time datetime="${h(at)}">${h(relTime(at, now))}</time>` : ''}.</p>` : '';
-  // A 200 that omits some of the expected markets: rows are simply missing, say so.
+  // A 200 that omits some of the expected markets: the last good values are carried forward where there are
+  // any (`carried`), the rest of the rows are missing — say which.
   for (const k of ['kalshi', 'polymarket']) {
     const v = src[k];
     if (v && v.ok && v.partial && Array.isArray(v.missing) && v.missing.length) {
-      warn += `<p class="warn">${VENUE_NAME[k]} did not return ${v.missing.length} of the expected markets (${h(v.missing.join(', '))}) — those rows are omitted.</p>`;
+      const carried = Array.isArray(v.carried) ? v.carried : [];
+      if (!carried.length) { warn += `<p class="warn">${VENUE_NAME[k]} did not return ${v.missing.length} of the expected markets (${h(v.missing.join(', '))}) — those rows are omitted.</p>`; continue; }
+      // Polymarket's `missing` lists event slugs while `carried` lists market slugs, so once everything missing is
+      // covered nothing is omitted even if the ids differ.
+      const omitted = carried.length >= v.missing.length ? [] : v.missing.filter((id) => !carried.includes(id));
+      const parts = [`showing last good values for ${h(carried.join(', '))}`];
+      if (omitted.length) parts.push(`${h(omitted.join(', '))} ${omitted.length === 1 ? 'is' : 'are'} omitted`);
+      warn += `<p class="warn">${VENUE_NAME[k]} did not return ${v.missing.length} of the expected markets — ${parts.join('; ')}.</p>`;
     }
   }
   const anyRows = ['early', 'stays', 'election2028'].some((k) => g[k] && g[k].length);
@@ -163,7 +176,7 @@ export function pageVars({ snap, news, origin = '', now = Date.now() }) {
     ? `${answer}. ${dl.text}. Live odds, approval and news on the ${p.name || 'presidential'} term.`
     : `${answer}. ${dl.text}. Chance it actually ends by Jan 20, 2029: ${ends}. Live odds, approval and news on the ${p.name || 'presidential'} term.`;
   const stateJson = JSON.stringify({
-    updatedAt: snap.updatedAt, stale: !!snap.stale, termEnd: snap.termEnd, verdict: answer, verdictReason: snap.verdictReason || null, endedAt: snap.endedAt, ends: snap.ends, early: snap.early,
+    updatedAt: snap.updatedAt, stale: !!snap.stale, termEnd: snap.termEnd, verdict: answer, verdictReason: snap.verdictReason || null, endedAt: snap.endedAt, confirmed: !!snap.confirmed, ends: snap.ends, early: snap.early,
     approval: snap.approval && { approve: snap.approval.approve, disapprove: snap.approval.disapprove, net: snap.approval.net }, sources: snap.sources,
   }).replace(/</g, '\\u003c');
   const newsAt = news && news.updatedAt;

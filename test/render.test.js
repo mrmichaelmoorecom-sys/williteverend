@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket } from '../src/lib/markets.js';
-import { buildSnapshot, computeApproval } from '../src/lib/snapshot.js';
+import { buildSnapshot, computeApproval, K } from '../src/lib/snapshot.js';
 import { pageVars, fillTemplate, relTime, fmtVolume, fmtDate, easternOffsetHours, daysLine, renderNews, renderOdds, renderApproval, renderHeadline, endedLabel } from '../src/lib/render.js';
 
 const fx = (n) => readFileSync(new URL(`./fixtures/${n}`, import.meta.url), 'utf8');
@@ -62,6 +62,26 @@ test('YES state renders YES + "It ended <date>" and updates og description', () 
   assert.match(endedLabel({ verdictReason: 'Polymarket trump-out-as-president-before-2027 resolved YES' }), /^Polymarket.s "out as President" market resolved YES\.$/);
   assert.equal(endedLabel({ verdictReason: 'manual override (YES)' }), 'Marked as ended.');
   assert.match(renderHeadline({ verdict: 'YES', verdictReason: 'term ended on schedule', ends: { pct: 89.6 }, early: { pct: 23.5, expectEarly: true } }), /^<p class="chance ended">.*schedule\.<\/span><\/p>$/);
+});
+
+test('unconfirmed YES (Kalshi umbrella only): YES + live countdown, honest banner copy, confirmed:false in #state', () => {
+  const s = snap();
+  const kalshi = { ...s.markets.kalshi, [K.OUT_JAN2029]: { ...s.markets.kalshi[K.OUT_JAN2029], status: 'finalized', result: 'yes' } };
+  const u = buildSnapshot({ now: NOW, config, kalshi: { ok: true, markets: kalshi }, polymarket: { ok: true, markets: s.markets.polymarket } });
+  assert.equal(u.verdict, 'YES'); assert.equal(u.confirmed, false); assert.equal(u.endedAt, null);
+  const tpl = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const html = fillTemplate(tpl, pageVars({ snap: u, news: null, origin: 'https://williteverend.com', now: NOW }));
+  assert.match(html, /<h1 class="answer" id="answer"[^>]*>YES<\/h1>/);
+  assert.match(html, />851 days left</);
+  assert.doesNotMatch(html, /It ended/);
+  assert.doesNotMatch(html, /0 days left/);
+  assert.match(html, /settled YES — it also pays out on an announced departure within a year\./);
+  assert.doesNotMatch(html, /id="ends-pct"/);
+  assert.match(html, /"confirmed":false/);
+  assert.equal(daysLine({ termEnd: '2029-01-20T17:00:00Z', verdict: 'YES', endedAt: null }, NOW).text, '851 days left');
+  // a confirmed YES still reads "It ended"; an endedAt in the future (clock skew) keeps the countdown rather than "0 days left"
+  assert.equal(daysLine({ termEnd: '2029-01-20T17:00:00Z', verdict: 'YES', endedAt: '2026-09-22T00:00:00Z' }, NOW).text, 'It ended Sep 21, 2026');
+  assert.equal(daysLine({ termEnd: '2029-01-20T17:00:00Z', verdict: 'YES', endedAt: '2026-09-23T00:00:00Z' }, NOW).text, '851 days left');
 });
 
 test('graceful degradation: no odds / no approval / no news', () => {

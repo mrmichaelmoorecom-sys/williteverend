@@ -94,21 +94,35 @@ export function computeEarly({ kalshi = {}, polymarket = {}, monthly = null, now
   };
 }
 
-/** §1.8 — NO → YES. config override > KV override > computed. Returns { verdict, reason, endedAt }. */
+export const UMBRELLA_UNCONFIRMED = `Kalshi ${K.OUT_JAN2029} settled YES (unconfirmed: also pays on an announced departure)`;
+
+/**
+ * §1.8 — NO → YES. config override > KV override > computed. Returns { verdict, reason, endedAt, confirmed }.
+ * Act-based triggers come first (term end, resignation / Senate conviction settled, a Polymarket exit market
+ * resolved YES): those set confirmed:true and an endedAt. The Kalshi umbrella KXTRUMPOUT27-27-JAN2029 also
+ * pays out on a mere ANNOUNCEMENT that he will leave within a year (rules_secondary), so on its own it flips
+ * the answer to YES but confirmed:false with no endedAt — the countdown keeps running until an act confirms it.
+ */
 export function computeVerdict({ now = Date.now(), termEnd = TERM_END_DEFAULT, override = null, kvOverride = null, kalshi = {}, polymarket = {}, monthly = null }) {
   const ov = (v) => (typeof v === 'string' && /^(yes|no)$/i.test(v.trim()) ? v.trim().toUpperCase() : null);
   const cfg = ov(override), kv = ov(kvOverride);
-  if (cfg) return { verdict: cfg, reason: `config override (${cfg})`, endedAt: cfg === 'YES' ? new Date(now).toISOString() : null };
-  if (kv) return { verdict: kv, reason: `manual override (${kv})`, endedAt: kv === 'YES' ? new Date(now).toISOString() : null };
-  if (now >= Date.parse(termEnd)) return { verdict: 'YES', reason: 'term ended on schedule', endedAt: termEnd };
-  for (const t of [K.OUT_JAN2029, K.REMOVE, K.RESIGN]) {
+  const nowIso = new Date(now).toISOString();
+  if (cfg) return { verdict: cfg, reason: `config override (${cfg})`, endedAt: cfg === 'YES' ? nowIso : null, confirmed: cfg === 'YES' };
+  if (kv) return { verdict: kv, reason: `manual override (${kv})`, endedAt: kv === 'YES' ? nowIso : null, confirmed: kv === 'YES' };
+  if (now >= Date.parse(termEnd)) return { verdict: 'YES', reason: 'term ended on schedule', endedAt: termEnd, confirmed: true };
+  const settledYes = (r) => r && r.status === 'finalized' && String(r.result).toLowerCase() === 'yes';
+  // Kalshi's updated_time is bumped by definition changes (status → finalized), not by trades, so on a settled
+  // market it is the settlement time — closer to the event than the cron tick that first sees it.
+  const settledAt = (r) => { const t = Date.parse(r.updatedAt || ''); return Number.isFinite(t) && t <= now ? new Date(t).toISOString() : nowIso; };
+  for (const t of [K.REMOVE, K.RESIGN]) {
     const r = kalshi[t];
-    if (r && r.status === 'finalized' && String(r.result).toLowerCase() === 'yes') return { verdict: 'YES', reason: `Kalshi ${t} settled YES`, endedAt: r.updatedAt || new Date(now).toISOString() };
+    if (settledYes(r)) return { verdict: 'YES', reason: `Kalshi ${t} settled YES`, endedAt: settledAt(r), confirmed: true };
   }
   for (const r of [polymarket[PM.OUT_2027], monthly]) {
-    if (r && r.closed && r.resolvedYes) return { verdict: 'YES', reason: `Polymarket ${r.id} resolved YES`, endedAt: r.endDate || new Date(now).toISOString() };
+    if (r && r.closed && r.resolvedYes) return { verdict: 'YES', reason: `Polymarket ${r.id} resolved YES`, endedAt: r.endDate || nowIso, confirmed: true };
   }
-  return { verdict: 'NO', reason: 'no settled exit market; term end not reached', endedAt: null };
+  if (settledYes(kalshi[K.OUT_JAN2029])) return { verdict: 'YES', reason: UMBRELLA_UNCONFIRMED, endedAt: null, confirmed: false };
+  return { verdict: 'NO', reason: 'no settled exit market; term end not reached', endedAt: null, confirmed: false };
 }
 
 /** §2 — mean of the two primaries; reject a primary older than 7 days. */
@@ -129,15 +143,46 @@ const pctOf = (p) => (p == null ? null : Math.round(p * 1000) / 10);
 function row(label, r, extra = {}) {
   if (!r || r.prob == null) return null;
   return { label, venue: r.venue, id: r.id, prob: r.prob, pct: pctOf(r.prob), bid: r.bid, ask: r.ask, volume: r.volume, thin: !!r.thin,
-    link: r.link, embed: r.embed || null, endDate: r.endDate, status: r.status, closed: !!r.closed, ...extra };
+    link: r.link, embed: r.embed || null, endDate: r.endDate, status: r.status, closed: !!r.closed, carried: !!r.carried, ...extra };
 }
 
-const nameKey = (label) => String(label || '').toLowerCase().replace(/[^a-z]/g, '');
+/**
+ * Person key for cross-venue matching: dots removed first, then lone initials dropped, so
+ * "J.D. Vance"/"JD Vance" → jdvance, "Donald J. Trump"/"Donald Trump" → donaldtrump, "Donald J. Trump Jr." → donaldtrumpjr.
+ */
+export const nameKey = (label) => {
+  const words = String(label || '').toLowerCase().replace(/\./g, '').replace(/[^a-z\s]/g, '').split(/\s+/).filter(Boolean);
+  return words.filter((t) => t.length > 1).join('') || words.join('');   // a label made only of initials keeps them
+};
 
 /**
- * Merge the Kalshi and Polymarket 2028-winner lists into one row per person, keyed by the letters of the
- * name ("J.D. Vance" and "JD Vance" collide). Yes = venueMean of the venues that price that person
- * (thin gating + cross-venue mean per §1.6); `byVenue` keeps each venue's own price/link for the Venue cell.
+ * One display row for the same question priced on several venues: Yes = venueMean (thin gating + cross-venue
+ * mean, exactly the §1.6 rule the headline uses); `byVenue` keeps each venue's own price/link for the Venue
+ * cell. Returns null when no venue has a price. A single-venue question still gets a one-entry byVenue.
+ */
+export function mergeVenues(label, rows, extra = {}) {
+  const have = (rows || []).filter((r) => r && r.prob != null);
+  if (!have.length) return null;
+  const vm = venueMean(have);
+  if (vm.value == null) return null;
+  const byVenue = {};
+  for (const r of have) if (!byVenue[r.venue]) byVenue[r.venue] = { id: r.id, pct: pctOf(r.prob), prob: r.prob, link: r.link, volume: r.volume, thin: !!r.thin };
+  const vols = have.map((r) => r.volume).filter((v) => Number.isFinite(v));
+  return {
+    label, id: have.map((r) => r.id).join('|'),
+    venue: have.length === 1 ? have[0].venue : 'Kalshi + Polymarket', venues: vm.venues,
+    prob: r4(vm.value), pct: pctOf(vm.value), thin: vm.thin,
+    volume: vols.length ? vols.reduce((a, b) => a + b, 0) : null,
+    link: have[0].link, embed: null, endDate: have[0].endDate || null, closed: have.every((r) => r.closed),
+    carried: have.some((r) => !!r.carried), byVenue, ...extra,
+  };
+}
+
+/**
+ * Merge the Kalshi and Polymarket 2028-winner lists into one row per person, keyed by nameKey()
+ * ("J.D. Vance" and "JD Vance" collide), one mergeVenues() row per person, sorted, top N.
+ * Callers must pass lists deeper than `top` per venue (index.js fetches 20 each) so a person ranked 9th on
+ * one venue and 5th on the other is still merged rather than shown as single-venue.
  */
 export function mergeElection2028(kalshiRows, polymarketRows, top = 8) {
   const people = new Map();
@@ -154,18 +199,8 @@ export function mergeElection2028(kalshiRows, polymarketRows, top = 8) {
   }
   const out = [];
   for (const e of people.values()) {
-    const vm = venueMean(e.rows);
-    if (vm.value == null) continue;
-    const byVenue = {};
-    for (const r of e.rows) byVenue[r.venue] = { id: r.id, pct: pctOf(r.prob), prob: r.prob, link: r.link, volume: r.volume, thin: !!r.thin };
-    const vols = e.rows.map((r) => r.volume).filter((v) => Number.isFinite(v));
-    out.push({
-      label: e.label, id: e.rows.map((r) => r.id).join('|'),
-      venue: e.rows.length === 1 ? e.rows[0].venue : 'Kalshi + Polymarket', venues: vm.venues,
-      prob: r4(vm.value), pct: pctOf(vm.value), thin: vm.thin,
-      volume: vols.length ? vols.reduce((a, b) => a + b, 0) : null,
-      link: e.rows[0].link, embed: null, endDate: e.rows[0].endDate || null, closed: e.rows.every((r) => r.closed), byVenue,
-    });
+    const m = mergeVenues(e.label, e.rows);
+    if (m) out.push(m);
   }
   out.sort((a, b) => b.prob - a.prob);
   return out.slice(0, top);
@@ -193,12 +228,11 @@ export function buildGroups({ kalshi = {}, polymarket = {}, monthly = null, elec
     row('Insurrection Act invoked before Jan 20, 2029', k(K.INSURRECTION)),
   ].filter(Boolean);
   const occur = k(K.OCCUR2028);
+  // Same question on both venues → one row whose Yes is the cross-venue mean the headline uses (§1.6).
   const stays = [
-    row('Trump wins the 2028 election', k(K.WIN2028)),
-    row('Trump wins the 2028 election', p(PM.WIN2028)),
+    mergeVenues('Trump wins the 2028 election', [k(K.WIN2028), p(PM.WIN2028)]),
     occur ? row('2028 election does not occur', { ...occur, prob: r4(1 - occur.prob) }, { note: '1 − "election occurs" market' }) : null,
-    row('Trump is the 2028 GOP nominee', k(K.NOM2028)),
-    row('Trump is the 2028 GOP nominee', p(PM.NOM2028)),
+    mergeVenues('Trump is the 2028 GOP nominee', [k(K.NOM2028), p(PM.NOM2028)]),
     row('Announces a 2028 run before Election Day', k(K.RUN2028), { note: 'Kalshi files this under "Trump run for a third term"' }),
     row('Repeals presidential term limits in 2026', p(PM.TERM_LIMITS)),
     row('A Trump family member is the 2028 GOP nominee', k(K.FAMILY2028)),
@@ -230,19 +264,26 @@ export function buildSnapshot({
   const ends = computeEnds({ kalshi: km, polymarket: pm });
   const early = computeEarly({ kalshi: km, polymarket: pm, monthly, now, termEnd });
   const v = computeVerdict({ now, termEnd, override: config.override ?? override, kvOverride, kalshi: km, polymarket: pm, monthly });
-  // Keep the first "ended" timestamp once flipped so the date on the page doesn't drift.
-  if (v.verdict === 'YES' && prev && prev.verdict === 'YES' && prev.endedAt && v.reason === prev.verdictReason) v.endedAt = prev.endedAt;
+  // Once a CONFIRMED YES has an endedAt, keep that first date (and its reason) while the answer stays YES: the
+  // page shows the date of the first confirming event, not the cron time of later ones and not the scheduled
+  // term end after an earlier resignation. An unconfirmed (umbrella-only) YES pins nothing, so the first act
+  // that confirms it — resignation / removal settled, Polymarket resolved, term end — supplies the real date.
+  if (v.verdict === 'YES' && v.confirmed && prev && prev.verdict === 'YES' && prev.confirmed && prev.endedAt) {
+    v.endedAt = prev.endedAt;
+    if (prev.verdictReason) v.reason = prev.verdictReason;
+  }
   const groups = buildGroups({ kalshi: km, polymarket: pm, monthly, election2028 });
   const daysLeft = Math.max(0, Math.floor((Date.parse(termEnd) - now) / 86400e3));
   // §1.6 "both down → serve the last-good snapshot with ITS updatedAt": only a successful market fetch
   // advances updatedAt; a carried-forward snapshot keeps chaining back to the last real fetch.
   const marketsFresh = !!kalshi.ok || !!polymarket.ok;
-  const venueFlag = (v) => ({ ok: !!v.ok, at: v.at || null, error: v.error || null, partial: !!v.partial, missing: Array.isArray(v.missing) ? v.missing : [] });
+  const venueFlag = (v) => ({ ok: !!v.ok, at: v.at || null, error: v.error || null, partial: !!v.partial, missing: Array.isArray(v.missing) ? v.missing : [],
+    carried: Array.isArray(v.carried) ? v.carried : [], via: v.via || null });
   return {
     updatedAt: marketsFresh || !(prev && prev.updatedAt) ? new Date(now).toISOString() : prev.updatedAt,
     stale: !marketsFresh,
     termEnd,
-    verdict: v.verdict, verdictReason: v.reason, endedAt: v.endedAt,
+    verdict: v.verdict, verdictReason: v.reason, endedAt: v.endedAt, confirmed: !!v.confirmed,
     daysLeft,
     ends, early,
     groups,
