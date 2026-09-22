@@ -5,7 +5,11 @@
   "compatibility_date": "2026-09-01",
   "assets": {
     "directory": "./public",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    "run_worker_first": ["/", "/index.html", "/api/*"]
   },
+  "triggers": { "crons": ["*/10 * * * *", "5 * * * *"] },
+  "kv_namespaces": [{ "binding": "STATE", "id": "701133a398414aaa81b191a2660ac351" }],
   "observability": { "enabled": true }
 }

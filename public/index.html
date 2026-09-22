@@ -1,7 +1,69 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Will it ever end?</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body{height:100%;margin:0;background:#fff;color:#000;font-family:Georgia,"Times New Roman",serif}
-body{display:flex;align-items:center;justify-content:center;flex-direction:column}
-h1{font-size:min(40vw,320px);margin:0;line-height:1;letter-spacing:-.04em}p{margin:.5em 0 0;font-size:1.1rem}</style></head>
-<body><h1>NO</h1><p>(loading…)</p></body></html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Will it ever end?</title>
+<meta name="description" content="{{ogDescription}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="williteverend.com">
+<meta property="og:title" content="Will it ever end?">
+<meta property="og:description" content="{{ogDescription}}">
+<meta property="og:url" content="{{origin}}/">
+<meta property="og:image" content="{{origin}}/portrait.jpg">
+<meta property="og:image:width" content="960">
+<meta property="og:image:height" content="1200">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Will it ever end?">
+<meta name="twitter:description" content="{{ogDescription}}">
+<meta name="twitter:image" content="{{origin}}/portrait.jpg">
+<meta name="theme-color" content="#ffffff">
+<link rel="icon" href="{{favicon}}">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="answer-{{answerClass}}">
+
+<header class="hero">
+  <a class="portrait-link" href="{{portraitFull}}" title="Official portrait (full size)">
+    <img class="portrait" src="{{portrait}}" width="960" height="1200" alt="Official White House portrait of {{presidentName}}" fetchpriority="high">
+  </a>
+  <h1 class="answer" id="answer" aria-live="polite">{{answer}}</h1>
+  <p class="days" id="days" title="{{daysTitle}}">{{daysLine}}</p>
+  <div class="banner" id="banner">
+    {{headline}}
+    <details class="how">
+      <summary>how is this computed?</summary>
+      <p>"Chance it actually ends" = 1 − P(stays past Jan 20, 2029). P(stays) = P(Trump wins the 2028 election) + P(the 2028 election does not occur), treated as disjoint, using the mean of Kalshi and Polymarket where both price the same question (Kalshi alone for the election-occurs leg). "Chance it ends early" is the highest-priced of Kalshi's nested early-exit markets (leaves office / resigns / impeached-and-removed / 25th Amendment) — the maximum, not the sum, because they overlap. Prices are order-book midpoints; thin markets (wide spread or low liquidity) are ignored when a solid one exists. No market on either venue prices the president's death; Kalshi's "leaves office" market explicitly excludes it. Approval does not enter the formula. The answer flips to YES when the term-end date passes, when a Kalshi exit market settles YES, when a Polymarket exit market resolves YES, or by a manual override.</p>
+    </details>
+  </div>
+</header>
+
+<main>
+  <section id="odds" aria-labelledby="odds-h">
+    <h2 id="odds-h">The odds</h2>
+    {{odds}}
+  </section>
+
+  <section id="approval" aria-labelledby="approval-h">
+    <h2 id="approval-h">Approval</h2>
+    {{approval}}
+  </section>
+
+  <section id="news" aria-labelledby="news-h">
+    <h2 id="news-h">The news</h2>
+    {{news}}
+    <p class="fine">Feed updated <time id="news-updated" datetime="{{newsUpdatedIso}}">{{newsUpdatedRel}}</time>. Headlines link to the publisher; Google News links pass through news.google.com.</p>
+  </section>
+</main>
+
+<footer>
+  <p>{{credit}}</p>
+  <p>Odds: Kalshi, Polymarket · Approval: NYT, Silver Bulletin · News: Google News, Guardian, Politico, The Hill</p>
+  <p>Updated <time id="updated" datetime="{{updatedIso}}">{{updatedRel}}</time> · term ends {{termEndHuman}} · <a href="/api/state">api</a></p>
+  <p><a href="{{coffee}}" target="_blank" rel="noopener">buy me a coffee</a> · <a href="{{github}}" target="_blank" rel="noopener">GitHub</a></p>
+</footer>
+
+<script type="application/json" id="state">{{stateJson}}</script>
+<script src="/app.js" defer></script>
+</body>
+</html>

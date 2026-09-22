@@ -2,7 +2,8 @@
   "name": "williteverend",
   "private": true,
   "version": "0.1.0",
-  "description": "Will it ever end? — williteverend.com",
+  "description": "Will it ever end? \u2014 williteverend.com",
+  "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",

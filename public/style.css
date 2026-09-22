@@ -1,0 +1,154 @@
+/* williteverend.com — white page, black type, one serif for the answer, plain sans for the rest. */
+:root {
+  --ink: #000;
+  --paper: #fff;
+  --rule: #000;
+  --mute: #555;
+  --serif: Georgia, "Times New Roman", Times, serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { background: var(--paper); }
+body {
+  margin: 0;
+  padding: 0 16px calc(24px + env(safe-area-inset-bottom, 0px));
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.4;
+  max-width: 960px;
+  margin-inline: auto;
+  overflow-x: hidden;
+}
+a { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+img { max-width: 100%; height: auto; }
+
+/* ---- hero ---- */
+.hero {
+  min-height: min(100svh, 860px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px 0 32px;
+  border-bottom: 1px solid var(--rule);
+}
+.portrait-link { display: block; line-height: 0; }
+.portrait {
+  width: clamp(120px, 24vw, 220px);
+  height: auto;
+  aspect-ratio: 4 / 5;
+  object-fit: cover;
+  object-position: top;
+  border: 1px solid var(--rule);
+}
+.answer {
+  font-family: var(--serif);
+  font-weight: 700;
+  font-size: clamp(9rem, 42vw, 30rem);
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+  margin: 0.05em 0 0;
+  max-width: 100%;
+  overflow-wrap: normal;
+}
+.answer-yes .answer { letter-spacing: -0.06em; font-size: clamp(7rem, 30vw, 20rem); }
+.days {
+  font-family: var(--mono);
+  font-size: clamp(1rem, 2.2vw, 1.25rem);
+  margin: 0.6em 0 0;
+  cursor: help;
+}
+.banner { margin-top: 1.4em; width: 100%; max-width: 34rem; }
+.chance { margin: 0.2em 0; font-size: 1.05rem; }
+.chance .k { text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.8rem; color: var(--mute); }
+.chance strong { font-family: var(--mono); font-size: 1.15em; }
+.chance.secondary { font-size: 0.95rem; }
+.expect { font-family: var(--mono); font-weight: 700; text-transform: uppercase; margin: 0.4em 0 0; }
+.tag { color: var(--mute); font-size: 0.85em; }
+.how { margin-top: 0.8em; font-size: 0.85rem; color: var(--mute); }
+.how summary { cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.how p { text-align: left; margin: 0.6em 0 0; }
+
+/* ---- sections ---- */
+main section { padding: 20px 0 8px; border-bottom: 1px solid var(--rule); }
+h2 {
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin: 0 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 3px double var(--rule);
+}
+h3 {
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin: 18px 0 6px;
+  color: var(--mute);
+}
+.unavail, .warn { font-family: var(--mono); color: var(--mute); }
+.warn { border: 1px dashed var(--mute); padding: 6px 8px; font-size: 0.85rem; }
+.fine { font-size: 0.8rem; color: var(--mute); margin: 14px 0 8px; }
+
+/* ---- odds tables ---- */
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+thead th { text-align: left; font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mute); border-bottom: 1px solid var(--rule); padding: 4px 6px 4px 0; font-weight: 600; }
+tbody th, tbody td { text-align: left; font-weight: 400; padding: 5px 6px 5px 0; border-bottom: 1px solid #ddd; vertical-align: top; }
+tbody th { width: 52%; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 14px; }
+td.vol { font-family: var(--mono); font-size: 0.8rem; color: var(--mute); white-space: nowrap; }
+tr.primary th, tr.primary td { font-weight: 700; }
+.note { display: block; font-size: 0.75rem; color: var(--mute); font-weight: 400; }
+.flag { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; border: 1px solid var(--mute); padding: 0 3px; }
+
+/* ---- embeds ---- */
+.embeds { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 18px 0 8px; }
+.embed { margin: 0; border: 1px solid var(--rule); padding: 8px; }
+.embed figcaption { font-size: 0.85rem; margin-bottom: 6px; }
+.embed iframe { width: 100%; height: 320px; border: 0; display: block; }
+.embed button { font: inherit; font-size: 0.8rem; background: var(--paper); color: var(--ink); border: 1px solid var(--ink); padding: 4px 8px; cursor: pointer; }
+
+/* ---- approval ---- */
+.approval { display: flex; flex-wrap: wrap; gap: 8px 32px; margin: 0 0 10px; }
+.approval div { display: flex; flex-direction: column; }
+.approval dt { font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mute); }
+.approval dd { margin: 0; font-family: var(--mono); font-size: 1.8rem; font-variant-numeric: tabular-nums; }
+.sources { list-style: none; padding: 0; margin: 0; font-size: 0.88rem; }
+.sources li { margin: 2px 0; }
+
+/* ---- news ---- */
+.news { list-style: none; padding: 0; margin: 0; }
+.news li { padding: 6px 0; border-bottom: 1px solid #ddd; }
+.news a { font-family: var(--serif); font-size: 1.05rem; text-transform: uppercase; letter-spacing: 0.01em; line-height: 1.25; }
+.news .src { display: block; font-size: 0.75rem; color: var(--mute); font-family: var(--mono); margin-top: 2px; }
+
+/* ---- footer ---- */
+footer { padding: 18px 0 0; font-size: 0.78rem; color: var(--mute); text-align: center; }
+footer p { margin: 4px 0; }
+footer a { color: inherit; }
+
+@media (max-width: 600px) {
+  body { font-size: 14px; }
+  .answer { font-size: clamp(6rem, 46vw, 12rem); }
+  .answer-yes .answer { font-size: clamp(5rem, 27vw, 10rem); }
+  tbody th { width: 50%; }
+  td.vol, thead th:nth-child(4) { display: none; }
+  td.num, th.num { padding-right: 10px; }
+  .news a { font-size: 0.98rem; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .answer { transition: opacity 0.4s ease; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+@media print { .embeds, footer a[href*="coffee"] { display: none; } }

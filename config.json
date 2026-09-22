@@ -1,0 +1,18 @@
+{
+  "termEnd": "2029-01-20T17:00:00Z",
+  "override": null,
+  "president": {
+    "name": "Donald J. Trump",
+    "term": "2nd term",
+    "inaugurated": "2025-01-20T17:00:00Z",
+    "portrait": "/portrait.jpg",
+    "portraitFull": "/portrait-full.jpg",
+    "portraitCredit": "Official White House portrait, June 2025 (photo: Daniel Torok) — public domain, 17 U.S.C. § 105"
+  },
+  "links": {
+    "github": "https://github.com/mrmichaelmoorecom-sys/williteverend",
+    "coffee": "https://buymeacoffee.com/mrmichaelmoore",
+    "site": "https://williteverend.com"
+  },
+  "newsQuery": "Trump administration"
+}
