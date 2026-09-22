@@ -7,7 +7,7 @@ import config from '../config.json' with { type: 'json' };
 import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket, parsePolymarket2028, parseKalshi2028, pickMonthlyOutEvent } from './lib/markets.js';
 import { parseNyt, parseDatawrapperVersion, parseSilverBulletin } from './lib/csv.js';
 import { parseRss, mergeItems } from './lib/rss.js';
-import { buildSnapshot, computeApproval, KALSHI_TICKERS, PM_KEYSET_EVENTS, PM } from './lib/snapshot.js';
+import { buildSnapshot, computeApproval, K, KALSHI_TICKERS, PM_KEYSET_EVENTS, PM } from './lib/snapshot.js';
 import { pageVars, fillTemplate, fmtDate, daysLine } from './lib/render.js';
 import { pickJob, JOBS } from './lib/schedule.js';
 import { kalshiSigner } from './lib/kalshiAuth.js';
@@ -29,7 +29,7 @@ const EMPTY_NEWS = { updatedAt: null, items: [] };
 // credential only the owner can create — an API key (secrets KALSHI_KEY_ID + KALSHI_PRIVATE_KEY → signed
 // requests, see src/lib/kalshiAuth.js) or the GitHub Actions relay (.github/workflows/kalshi.yml → KV `kalshi`,
 // read below when the direct call fails). Both paths are inert until configured. See README "Kalshi and 429s".
-export const tuning = { retries: 2, retryDelayMs: () => 2000 + Math.random() * 2000, singlesGapMs: () => 350, singlesBackoffMs: (i) => 1500 * (i + 1), relayMaxAgeMs: 45 * 60e3 };
+export const tuning = { retries: 2, retryDelayMs: () => 2000 + Math.random() * 2000, singlesGapMs: () => 350, singlesBackoffMs: (i) => 2000 * (i + 1), singlesAttempts: 4, relayMaxAgeMs: 45 * 60e3 };
 const RELAY_KEY = 'kalshi';
 
 // Security headers for the rendered page. connect-src must gain https://clob.polymarket.com and
@@ -104,16 +104,21 @@ async function readRelay(env, now) {
  * from the same edge (probed 2026-09-22, every UA). So: batch first (1 subrequest; works from anywhere else),
  * then one request per ticker in parallel (18 subrequests, no retries), then the relay, then the previous map.
  */
-const fetchKalshiSingles = async (env) => {
+// Headline inputs first (§1.6/§1.7/§1.8), so a tick that runs out of quota still moves the numbers that matter.
+const SINGLES_ORDER = [K.OUT_JAN2029, K.OCCUR2028, K.WIN2028, K.REMOVE, K.RESIGN, K.AMEND25, ...KALSHI_TICKERS.filter((t) => ![K.OUT_JAN2029, K.OCCUR2028, K.WIN2028, K.REMOVE, K.RESIGN, K.AMEND25].includes(t))];
+const fetchKalshiSingles = async (env, { patient = false } = {}) => {
   // Sequential on purpose: 18 concurrent singles from one shared egress IP trip the same per-IP limiter
-  // (3/18 came back in production, 11/18 at 120 ms spacing); ~3 req/s with backoff passes. Wall clock only, no CPU cost.
+  // (3/18 came back in production, 11/18 at 120 ms spacing, 14/18 at 350 ms + 3 attempts). The quota is
+  // shared with every other Worker in the colo, so failures are random; the cron can afford to wait it out
+  // (`patient`), a cold-start page load cannot. Wall clock only, no CPU cost.
   const markets = [];
+  const attempts = patient ? tuning.singlesAttempts : 2;
   let firstErr = null;
-  for (const t of KALSHI_TICKERS) {
+  for (const t of SINGLES_ORDER) {
     let j = null;
-    for (let i = 0; i < 3 && !j; i++) {
+    for (let i = 0; i < attempts && !j; i++) {
       try { j = await getJson(`${KALSHI}/markets/${t}`, { ...kalshiOpts(env), retries: 0 }); }
-      catch (e) { firstErr = firstErr || e; if (i < 2 && /HTTP 429/.test(reason(e))) await sleep(tuning.singlesBackoffMs(i)); else break; }
+      catch (e) { firstErr = firstErr || e; if (i < attempts - 1 && /HTTP 429/.test(reason(e))) await sleep(tuning.singlesBackoffMs(i)); else break; }
     }
     if (j && j.market) markets.push(j.market);
     await sleep(tuning.singlesGapMs());
@@ -122,12 +127,12 @@ const fetchKalshiSingles = async (env) => {
   const out = kalshiBatch({ markets });
   return { ...out, via: 'singles' };   // `missing` already surfaces as sources.kalshi.partial, same as the batch path
 };
-const fetchKalshi = async (env, now = Date.now()) => {
+const fetchKalshi = async (env, now = Date.now(), { patient = false } = {}) => {
   let batchErr;
   try { return await getJson(`${KALSHI}/markets?tickers=${KALSHI_TICKERS.join(',')}`, { ...kalshiOpts(env), retries: 0 }).then(kalshiBatch); }
   catch (e) { batchErr = e; }
   let singlesErr;
-  try { return await fetchKalshiSingles(env); }
+  try { return await fetchKalshiSingles(env, { patient }); }
   catch (e) { singlesErr = e; }
   const relay = await readRelay(env, now);
   // Compact: `attempt()` keeps 200 chars and the batch URL alone is longer than that.
@@ -236,7 +241,7 @@ export async function refresh(env, { schedule = false, job = null, now = Date.no
   if (monthlySlug && prev.monthly.endDate && Date.parse(prev.monthly.endDate) < now) monthlySlug = null;
   const needDiscover = job === 'election2028' || !prev;
   const [kalshi, polymarket, disc] = await Promise.all([
-    attempt(() => fetchKalshi(env, now)), attempt(fetchPolymarket), needDiscover ? attempt(() => discoverMonthly(now)) : Promise.resolve({ ok: true, value: monthlySlug }),
+    attempt(() => fetchKalshi(env, now, { patient: schedule })), attempt(fetchPolymarket), needDiscover ? attempt(() => discoverMonthly(now)) : Promise.resolve({ ok: true, value: monthlySlug }),
   ]);
   if (disc.ok) monthlySlug = disc.value;
   const monthly = await attempt(() => fetchMonthly(monthlySlug));

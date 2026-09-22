@@ -289,7 +289,8 @@ test('Kalshi 429: batch → per-ticker singles → KV relay → previous map', a
   calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('rate limited', { status: 429 }), '/trade-api/v2/markets/KX': () => new Response('rate limited', { status: 429 }) });
   ({ snap } = await refresh({ STATE }, { schedule: true, now: NOW + 1200e3 }));
   assert.equal(snap.sources.kalshi.ok, false); assert.match(snap.sources.kalshi.error, /^HTTP 429 \(batch\); HTTP 429 \(per-ticker\)/);
-  assert.equal(calls.filter((u) => /\/trade-api\/v2\/markets\/KX/.test(u)).length, 54);   // 3 attempts per ticker on 429
+  assert.equal(calls.filter((u) => /\/trade-api\/v2\/markets\/KX/.test(u)).length, 72);   // cron is patient: 4 attempts per ticker on 429
+  assert.equal(calls[calls.findIndex((u) => /\/trade-api\/v2\/markets\/KX/.test(u))].split('/markets/')[1], 'KXTRUMPOUT27-27-JAN2029');   // headline ticker first
   assert.equal(snap.ends.pct, 89.6); assert.equal(Object.keys(snap.markets.kalshi).length, 16);
   // a 404 on the batch also falls through to singles (one batch call only)
   calls = []; mockFetch(calls, { '/markets?tickers=': () => new Response('nope', { status: 404 }), '/trade-api/v2/markets/KX': single });
