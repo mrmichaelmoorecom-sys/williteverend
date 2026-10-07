@@ -36,6 +36,29 @@ test('template fill renders NO, 851 days, 89.6% / 23.5%, approval and news with 
   assert.match(html, /embed\.polymarket\.com\/market\?market=trump-out-as-president-before-2027/);
   assert.match(html, /kalshi\.com\/markets\/kxtrumpout27\/x\/kxtrumpout27-27/);
   assert.match(html, /buymeacoffee\.com\/mrmichaelmoore/);
+  assert.doesNotMatch(html, /<img[^>]*class="portrait"/);   // no separate <img>: the word carries the picture
+  assert.match(html, /<a href="\/portrait-full\.jpg"[^>]*>Official White House portrait, June 2025[^<]*<\/a>/);
+});
+
+// The page ships under `style-src 'self'` (HTML_HEADERS in src/index.js), so a style="" attribute is
+// dropped by the browser and never reaches the page. The matte was briefly driven by an inline
+// --portrait custom property on the h1 and rendered as a solid black slab in a real browser for
+// exactly that reason, while a plain file server with no CSP looked fine. Keep styling in style.css.
+test('no inline style attributes: the page CSP is style-src self, which silently drops them', () => {
+  const tpl = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const html = fillTemplate(tpl, pageVars({ snap: snap(), news: null, origin: '', now: NOW }));
+  assert.doesNotMatch(html, /<[^>]+\sstyle\s*=/, 'inline style attribute in the page');
+  const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  assert.match(css, /background-image: url\("\/portrait\.jpg"\)/);   // the matte image lives in the stylesheet
+});
+
+test('the matte paints solid ink under the portrait and falls back wherever background-clip is unavailable', () => {
+  const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  // background-color is what keeps N and O solid where the portrait does not reach; without it the
+  // uncovered strokes would clip to transparent and the word would lose its outer edges.
+  assert.match(css, /\.answer \{[^}]*background-color: var\(--ink\)[^}]*background-image: url\("\/portrait\.jpg"\)/s);
+  assert.match(css, /@supports \(\(-webkit-background-clip: text\) or \(background-clip: text\)\)/);
+  assert.match(css, /@media print, \(forced-colors: active\)[^}]*\{[^}]*background-image: none/s);
 });
 
 test('YES state renders YES + "It ended <date>" and updates og description', () => {

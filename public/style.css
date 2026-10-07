@@ -52,6 +52,38 @@ img { max-width: 100%; height: auto; }
   overflow-wrap: normal;
 }
 .answer-yes .answer { letter-spacing: 0.02em; font-size: clamp(5rem, min(30vw, 48svh), 20rem); }   /* Georgia Bold "YES": at −0.06em the Y/E and E/S serifs overlap, at 0 they still touch; +0.02em separates them and still fits at every width */
+
+/* The word is the matte: the portrait is painted behind the answer and clipped to the letterforms,
+   so the picture shows through NO. The hero centres the h1 as a flex item, so the box already hugs
+   the glyphs, and every length here is a % of that box — the crop holds at every type size.
+   `auto 150%` is deliberately smaller than `cover`: cover would fill the box but crop the 4:5
+   portrait down to a band across the eyes, while at 150% the whole head reads inside the O. That
+   leaves the box's left and right uncovered, which is what the ink background-color is for — it is
+   clipped to the text too, so the outer strokes of N and O stay solid instead of dropping out, and
+   the seam hides in the portrait's own dark edges. Guarded by @supports: without background-clip
+   the transparent fill would leave the answer invisible, so it stays solid ink there, as it does in
+   print and in forced-colors mode.
+   The path is hard-coded here rather than driven from config.president.portrait: the Worker serves
+   the page under `style-src 'self'` (src/index.js HTML_HEADERS), so an inline style="--portrait: ..."
+   on the h1 is blocked by the browser and the word renders as a solid black slab. The stylesheet is
+   same-origin, so this is the one place the matte image can come from. Swapping the picture means
+   replacing public/portrait.jpg or editing this rule. */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .answer {
+    background-color: var(--ink);
+    background-image: url("/portrait.jpg");
+    background-size: auto 150%;
+    background-position: 50% 40%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+  @media print, (forced-colors: active) {
+    .answer { background-image: none; color: var(--ink); -webkit-text-fill-color: var(--ink); }
+  }
+}
 .days {
   font-family: var(--mono);
   font-size: clamp(1rem, 2.2vw, 1.25rem);
