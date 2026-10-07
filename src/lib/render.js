@@ -173,7 +173,7 @@ export function pageVars({ snap, news, origin = '', now = Date.now() }) {
     updatedIso: h(snap.updatedAt || ''), updatedRel: h(relTime(snap.updatedAt, now)),
     newsUpdatedIso: h(newsAt || ''), newsUpdatedRel: h(newsAt ? relTime(newsAt, now) : ''),
     stateJson, ogDescription: h(desc), origin: h(origin), favicon: faviconSvg(answer),
-    presidentName: h(p.name || 'The President'), portrait: h(p.portrait || '/portrait.jpg'), portraitFull: h(p.portraitFull || '/portrait-full.jpg'),
+    presidentName: h(p.name || 'The President'), portraitFull: h(p.portraitFull || '/portrait-full.jpg'),
     credit: h(p.portraitCredit || ''), coffee: h((c.links || {}).coffee || '#'), github: h((c.links || {}).github || '#'),
     termEndHuman: h(fmtDate(snap.termEnd)),
     verdictReason: h(snap.verdictReason || ''),

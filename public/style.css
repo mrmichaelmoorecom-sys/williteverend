@@ -62,11 +62,16 @@ img { max-width: 100%; height: auto; }
    clipped to the text too, so the outer strokes of N and O stay solid instead of dropping out, and
    the seam hides in the portrait's own dark edges. Guarded by @supports: without background-clip
    the transparent fill would leave the answer invisible, so it stays solid ink there, as it does in
-   print and in forced-colors mode. */
+   print and in forced-colors mode.
+   The path is hard-coded here rather than driven from config.president.portrait: the Worker serves
+   the page under `style-src 'self'` (src/index.js HTML_HEADERS), so an inline style="--portrait: ..."
+   on the h1 is blocked by the browser and the word renders as a solid black slab. The stylesheet is
+   same-origin, so this is the one place the matte image can come from. Swapping the picture means
+   replacing public/portrait.jpg or editing this rule. */
 @supports ((-webkit-background-clip: text) or (background-clip: text)) {
   .answer {
     background-color: var(--ink);
-    background-image: var(--portrait);   /* set on the h1 from config.president.portrait; if it is ever missing the ink below still paints a solid word */
+    background-image: url("/portrait.jpg");
     background-size: auto 150%;
     background-position: 50% 40%;
     background-repeat: no-repeat;
