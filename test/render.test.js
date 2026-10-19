@@ -13,7 +13,7 @@ function snap(over = {}) {
   const kalshi = parseKalshiBatch(JSON.parse(fx('k_batch.json')));
   const polymarket = parsePolymarketKeyset(JSON.parse(fx('pm_keyset.json')));
   for (const f of ['pm_win2028.json', 'pm_nom2028.json']) { const m = parsePolymarketMarket(JSON.parse(fx(f))); polymarket[m.id] = m; }
-  const approval = computeApproval({ nyt: { approve: 37.8, disapprove: 59.3, date: '2026-09-22' }, sb: { approve: 38.59664, disapprove: 58.8613, date: '2026-09-21' }, now: NOW });
+  const approval = computeApproval({ values: { nyt: { approve: 37.8, disapprove: 59.3, date: '2026-09-22' }, sb: { approve: 38.59664, disapprove: 58.8613, date: '2026-09-21' } }, now: NOW });
   return buildSnapshot({ now: NOW, config, kalshi: { ok: true, markets: kalshi, at: new Date(NOW).toISOString() }, polymarket: { ok: true, markets: polymarket, at: new Date(NOW).toISOString() }, approval, ...over });
 }
 

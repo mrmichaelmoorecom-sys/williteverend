@@ -28,6 +28,12 @@ function mockFetch(calls, routes = {}) {
     if (u.includes('president-averages.csv')) return text(fx('nyt_avg.csv'), 'text/csv');
     if (u.endsWith('/kSCt4/')) return text(fx('dw_resolver.html'), 'text/html');
     if (u.includes('/kSCt4/7832/dataset.csv')) return text(fx('sb.csv'), 'text/csv');
+    if (u.endsWith('/z8nax/')) return text(fx('dw_resolver_z8nax.html'), 'text/html');
+    if (u.includes('/z8nax/126/dataset.csv')) return text(fx('sin.csv'), 'text/csv');
+    if (u.includes('realclearpolling.com')) return text(fx('rcp.html'), 'text/html');
+    if (u.includes('decisiondeskhq.com')) return text(fx('ddhq.html'), 'text/html');
+    if (u.includes('yougov.com') && u.includes('/overall/')) return text(fx('yougov_overall.json'), 'application/json');
+    if (u.includes('yougov.com') && u.includes('/details/')) return text(fx('yougov_details.json'), 'application/json');
     if (u.includes('theguardian.com')) return text(fx('f_guardian.xml'), 'application/rss+xml');
     if (u.includes('politico.com')) return text(fx('f_politico.xml'), 'application/rss+xml');
     if (u.includes('thehill.com')) return text(fx('f_hill.xml'), 'application/rss+xml');
@@ -39,7 +45,8 @@ function kv() {
   const m = new Map();
   return { m, get: async (k, type) => { const v = m.get(k); return v == null ? null : type === 'json' ? JSON.parse(v) : v; }, put: async (k, v) => { m.set(k, v); }, delete: async (k) => { m.delete(k); } };
 }
-const HEAVY = ['president-averages', 'dwcdn.net', 'theguardian', 'politico', 'thehill', 'news.google', 'event_ticker=KXPRESPERSON-28', 'presidential-election-winner-2028'];
+const HEAVY = ['president-averages', 'dwcdn.net', 'theguardian', 'politico', 'thehill', 'news.google', 'event_ticker=KXPRESPERSON-28', 'presidential-election-winner-2028',
+  'realclearpolling', 'decisiondeskhq', 'yougov.com'];
 const heavyCalls = (calls) => calls.filter((u) => HEAVY.some((h) => u.includes(h)));
 
 const worker = await import('../src/index.js');
@@ -83,11 +90,21 @@ test('scheduled ticks: one heavy job per tick, approval → election2028 → new
   assert.equal(r.job, 'approval');
   assert.ok(calls.some((u) => u.includes('president-averages')) && calls.some((u) => u.includes('dataset.csv')));
   assert.ok(!calls.some((u) => u.includes('news.google') || u.includes('event_ticker=KXPRESPERSON-28')));
-  assert.equal(r.snap.approval.sources.length, 2);
+  assert.equal(r.snap.approval.sources.length, 6);   // every registered source is reported, fetched this run or not
   assert.equal(r.snap.approval.approve, 38.2);                // deterministic: the 7.5-day freshness gate sees the pinned clock
   assert.ok(r.snap.jobs.approval);
   const snapKv = JSON.parse(STATE.m.get('snapshot'));
   assert.equal(snapKv.approval.approve, r.snap.approval.approve);
+
+  calls.length = 0;
+  r = await refresh({ STATE }, { schedule: true, now: NOW });
+  assert.equal(r.job, 'approvalExtra');
+  // one extra per tick, never all of them: the 5.7 MB RCP page is first in the rotation
+  assert.ok(calls.some((u) => u.includes('realclearpolling')));
+  assert.ok(!calls.some((u) => u.includes('decisiondeskhq') || u.includes('yougov.com') || u.includes('z8nax')));
+  assert.ok(!calls.some((u) => u.includes('president-averages')), 'the primaries are not refetched by the extras job');
+  assert.equal(r.snap.approval.sources.find((x) => x.key === 'rcp').approve, 40.1);
+  assert.equal(r.snap.approval.approve, 38.8);   // headline now averages three aggregators: (37.8 + 38.59664 + 40.1) / 3
 
   calls.length = 0;
   r = await refresh({ STATE }, { schedule: true, now: NOW });
@@ -139,13 +156,13 @@ test('approval carry-forward: a failing primary keeps its previous value (ok sta
   await refresh({ STATE }, { now: NOW });
   let { snap } = await refresh({ STATE }, { job: 'approval', now: NOW });
   assert.equal(snap.approval.approve, 38.2); assert.equal(snap.approval.disapprove, 59.1); assert.equal(snap.approval.net, -20.9);
-  assert.equal(snap.approval.partial, false);
+  assert.equal(snap.approval.counted, 2); assert.equal(snap.approval.partial, true);   // the extras job has not run yet
   assert.equal(snap.sources.nyt.ok, true); assert.equal(snap.sources.sb.ok, true);
   assert.ok(snap.approval.sources.every((x) => x.error === undefined));
   // dataset step 500s (resolver still fine): SB value reused, still ok, error recorded
   mockFetch(calls, { 'dataset.csv': () => new Response('boom', { status: 500 }) });
   ({ snap } = await refresh({ STATE }, { job: 'approval', now: NOW + 3600e3 }));
-  assert.equal(snap.approval.approve, 38.2); assert.equal(snap.approval.partial, false);
+  assert.equal(snap.approval.approve, 38.2); assert.equal(snap.approval.counted, 2);
   let sb = snap.approval.sources.find((x) => x.key === 'sb');
   assert.equal(sb.ok, true); assert.equal(sb.approve, 38.59664); assert.equal(sb.date, '2026-09-21');
   assert.match(sb.error, /HTTP 500 .*dataset\.csv/);
@@ -168,7 +185,7 @@ test('approval carry-forward: a failing primary keeps its previous value (ok sta
   assert.ok(!sb.ok); assert.equal(snap.sources.sb.ok, false); assert.match(snap.sources.sb.error, /HTTP 503/);
   mockFetch(calls);
   ({ snap } = await refresh({ STATE: COLD }, { job: 'approval', now: NOW + 3600e3 }));
-  assert.equal(snap.approval.partial, false); assert.equal(snap.approval.approve, 38.2);
+  assert.equal(snap.approval.counted, 2); assert.equal(snap.approval.approve, 38.2);
   assert.equal(snap.approval.sources.find((x) => x.key === 'sb').error, undefined);
 });
 

@@ -6,6 +6,7 @@
 import config from '../config.json' with { type: 'json' };
 import { parseKalshiBatch, parsePolymarketKeyset, parsePolymarketMarket, parsePolymarket2028, parseKalshi2028, pickMonthlyOutEvent } from './lib/markets.js';
 import { parseNyt, parseDatawrapperVersion, parseSilverBulletin } from './lib/csv.js';
+import { parseRcp, parseDdhq, parseYouGov, parseStrengthInNumbers, APPROVAL_SOURCES } from './lib/approval.js';
 import { parseRss, mergeItems } from './lib/rss.js';
 import { buildSnapshot, computeApproval, K, KALSHI_TICKERS, PM_KEYSET_EVENTS, PM } from './lib/snapshot.js';
 import { pageVars, fillTemplate, fmtDate, daysLine } from './lib/render.js';
@@ -193,18 +194,70 @@ const fetchElection2028 = async (env, now = Date.now()) => {
   if (k.status === 'rejected' && p.status === 'rejected') throw new Error(`2028: ${reason(k.reason)} / ${reason(p.reason)}`);
   return { kalshi: k.status === 'fulfilled' ? k.value : null, polymarket: p.status === 'fulfilled' ? p.value : null, at: new Date().toISOString() };
 };
-const fetchApproval = async (prev, now = Date.now()) => {
-  const [nyt, sb] = await Promise.all([
-    attempt(() => getText('https://www.nytimes.com/newsgraphics/polls/approval/president-averages.csv', { ua: BROWSER_UA }).then(parseNyt)),
-    attempt(async () => {
-      const v = parseDatawrapperVersion(await getText('https://datawrapper.dwcdn.net/kSCt4/', { ua: BROWSER_UA }), 'kSCt4');
-      return parseSilverBulletin(await getText(`https://datawrapper.dwcdn.net/kSCt4/${v}/dataset.csv`, { ua: BROWSER_UA }));
-    }),
-  ]);
-  const prevSrc = (key) => ((prev && prev.approval && prev.approval.sources) || []).find((s) => s.key === key);
-  const pickSrc = (r, key) => (r.ok ? r.value : prevSrc(key) && prevSrc(key).ok ? { approve: prevSrc(key).approve, disapprove: prevSrc(key).disapprove, date: prevSrc(key).date } : null);
-  const out = computeApproval({ nyt: pickSrc(nyt, 'nyt'), sb: pickSrc(sb, 'sb'), now });
-  for (const s of out.sources) { const r = s.key === 'nyt' ? nyt : sb; if (!r.ok) s.error = r.error; }
+// One fetcher per approval source key. Each returns the parsed {approve, disapprove, date} (or {net, date});
+// the Datawrapper pair is two hops because its dataset URLs are version-pinned and must be re-resolved.
+const dwDataset = async (chartId, parse) => {
+  const v = parseDatawrapperVersion(await getText(`https://datawrapper.dwcdn.net/${chartId}/`, { ua: BROWSER_UA }), chartId);
+  return parse(await getText(`https://datawrapper.dwcdn.net/${chartId}/${v}/dataset.csv`, { ua: BROWSER_UA }));
+};
+const YOUGOV = 'https://api-test.yougov.com/public-data/v5/us/trackers/donald-trump-approval';
+const APPROVAL_FETCHERS = {
+  nyt: () => getText('https://www.nytimes.com/newsgraphics/polls/approval/president-averages.csv', { ua: BROWSER_UA }).then(parseNyt),
+  sb: () => dwDataset('kSCt4', parseSilverBulletin),
+  // RCP needs the Chrome UA *and* Accept-Language; without the latter DataDome answers 403.
+  rcp: (now) => getText('https://www.realclearpolling.com/polls/approval/donald-trump/approval-rating',
+    { ua: BROWSER_UA, headers: { 'accept-language': 'en-US,en;q=0.9' } }).then((html) => parseRcp(html, { now })),
+  ddhq: () => getText('https://votes.decisiondeskhq.com/polls/presidential-approval/donald-j-trump-5/national/lv-rv-adults',
+    { ua: BROWSER_UA }).then(parseDdhq),
+  // Values and their dates come from two endpoints; the trailing slashes are required.
+  yougov: async () => {
+    const [overall, details] = await Promise.all([getJson(`${YOUGOV}/overall/`, { ua: BROWSER_UA }), getJson(`${YOUGOV}/details/`, { ua: BROWSER_UA })]);
+    return parseYouGov(overall, details);
+  },
+  sin: () => dwDataset('z8nax', parseStrengthInNumbers),
+};
+
+/** The two cheap CSV averages, refreshed together every approval run. */
+export const APPROVAL_PRIMARY = ['nyt', 'sb'];
+/** The heavier sources, one per approvalExtra run (see schedule.js for why they are not fetched together). */
+export const APPROVAL_EXTRAS = APPROVAL_SOURCES.map((s) => s.key).filter((k) => !APPROVAL_PRIMARY.includes(k));
+
+/** Whichever extra has gone longest without an ATTEMPT — never-tried first, so a failing one cannot starve the rest. */
+export function pickApprovalExtra(prev) {
+  const fetched = (prev && prev.approval && prev.approval.fetched) || {};
+  let pick = APPROVAL_EXTRAS[0], oldest = Infinity;
+  for (const k of APPROVAL_EXTRAS) {
+    const t = fetched[k] ? Date.parse(fetched[k]) : NaN;
+    const at = Number.isFinite(t) ? t : -Infinity;
+    if (at < oldest) { oldest = at; pick = k; }
+  }
+  return pick;
+}
+
+/** Last good value per source, so a key we are not fetching this run (or that just failed) keeps its number. */
+const approvalValuesFromPrev = (prev) => Object.fromEntries(
+  (((prev && prev.approval && prev.approval.sources) || []).filter((s) => s && s.key))
+    .map((s) => [s.key, { approve: s.approve, disapprove: s.disapprove, net: s.net, date: s.date }]));
+
+const fetchApproval = async (prev, { keys = APPROVAL_PRIMARY, now = Date.now() } = {}) => {
+  const results = await Promise.all(keys.map((k) => attempt(() => APPROVAL_FETCHERS[k](now))));
+  const values = approvalValuesFromPrev(prev);
+  const fetched = { ...((prev && prev.approval && prev.approval.fetched) || {}) };
+  const errors = {};
+  keys.forEach((k, i) => {
+    fetched[k] = new Date(now).toISOString();   // the ATTEMPT time, which is what the rotation reads
+    if (results[i].ok) values[k] = results[i].value; else errors[k] = results[i].error;
+  });
+  const out = computeApproval({ values, now });
+  // Errors carry forward like values do. Only one extra is fetched per run, so without this a scraper that
+  // broke three runs ago would read as merely "unavailable" with no reason — the one thing worth knowing.
+  const prevErr = Object.fromEntries((((prev && prev.approval && prev.approval.sources) || [])
+    .filter((x) => x && x.key && x.error)).map((x) => [x.key, x.error]));
+  for (const s of out.sources) {
+    const e = keys.includes(s.key) ? errors[s.key] : prevErr[s.key];   // a key fetched this run reports this run
+    if (e) s.error = e;
+  }
+  out.fetched = fetched;
   out.updatedAt = new Date().toISOString();
   return out;
 };
@@ -247,7 +300,8 @@ export async function refresh(env, { schedule = false, job = null, now = Date.no
   const monthly = await attempt(() => fetchMonthly(monthlySlug));
 
   const election2028 = job === 'election2028' ? await attempt(() => fetchElection2028(env, now)) : null;
-  const approval = job === 'approval' ? await attempt(() => fetchApproval(prev, now)) : null;
+  const approvalKeys = job === 'approval' ? APPROVAL_PRIMARY : job === 'approvalExtra' ? [pickApprovalExtra(prev)] : null;
+  const approval = approvalKeys ? await attempt(() => fetchApproval(prev, { keys: approvalKeys, now })) : null;
   const news = job === 'news' ? await attempt(() => fetchNews(now)) : null;
 
   // Per-market carry-forward with provenance. A venue that is down keeps its whole previous map; a venue that
@@ -358,7 +412,7 @@ export default {
     return env.ASSETS.fetch(request);
   },
   async scheduled(controller, env, ctx) {
-    // Every tick: markets + one due heavy job. Locally, `?cron=news|approval|election2028` forces that job.
+    // Every tick: markets + one due heavy job. Locally, `?cron=<job name>` forces that job (see JOBS).
     const job = JOBS.includes(controller.cron) ? controller.cron : null;
     const now = Number.isFinite(controller && controller.scheduledTime) ? controller.scheduledTime : Date.now();
     await refresh(env, { schedule: true, job, now }).catch((e) => console.error('refresh failed', e));

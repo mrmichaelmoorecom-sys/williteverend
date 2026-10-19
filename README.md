@@ -30,13 +30,18 @@ test/*.test.js       node --test, fixtures in test/fixtures/
 * Cron `*/10 * * * *`, every tick: Kalshi batch (1 call) + Polymarket keyset (1) + two 2028 slugs +
   the rolling "out by month-end" event → `buildSnapshot()` → KV `snapshot`. Then at most ONE heavy
   job, whichever is due (`src/lib/schedule.js`): **approval** (NYT + Silver Bulletin, every ~55 min),
+  **approvalExtra** (ONE of RCP / DDHQ / YouGov / Strength In Numbers per run, rotated, every ~55 min),
   **election2028** (Kalshi `KXPRESPERSON-28` + the 445 KB Polymarket `presidential-election-winner-2028`
   event + monthly-market discovery, every ~55 min), **news** (four feeds → KV `news`, every tick
-  nothing hourly is due). Progress is written after every job, so a fresh deploy converges in ~3 ticks.
+  nothing hourly is due). Progress is written after every job, so a fresh deploy converges in ~4 ticks.
 * **CPU budget.** This assumes the Workers **Free** plan: 10 ms CPU per invocation, for HTTP requests
   and cron ticks alike (exceeding it consistently kills the invocation with error 1102 and nothing is
   written). Measured cold costs with these parsers: light refresh ≈ 6–8 ms, approval ≈ 2 ms,
-  election2028 ≈ 5 ms, news ≈ 6 ms — no single invocation runs everything. The split is harmless on
+  election2028 ≈ 5 ms, news ≈ 6 ms — no single invocation runs everything. The extra approval sources are
+  rotated one per run for the same reason: RCP's page is 5.7 MB and costs ≈ 1.6 ms just to `text()`-decode,
+  so fetching them together would push a tick past the cap. Their parsers slice with `indexOf` before any
+  regex runs (measured: RCP 0.20 ms, DDHQ 0.14 ms, YouGov and SIN under 0.15 ms); a first cut of the DDHQ
+  parser that lazily captured every entry cost 2.2 ms on its own. The split is harmless on
   Workers Paid (30 s). After a deploy, check Worker → Metrics → "Errors by invocation status" for
   "Exceeded CPU Time Limits" and the observability logs' `cpuTimeMs` for scheduled events.
 * `/` reads both KV keys, injects the snapshot into `public/index.html` (answer, countdown seed,
@@ -162,7 +167,18 @@ Manual: `npm run deploy`.
 
 `docs/DATA_SOURCES.md` — every upstream endpoint, identifier, field path, formula and caveat, verified by curl on 2026-09-22. Read it before touching `src/lib/markets.js`, `csv.js` or `rss.js`.
 
+## Approval sources
+
+Six, in `src/lib/approval.js`. Only the four poll **aggregators** — NYT, Silver Bulletin, RealClearPolling,
+Decision Desk HQ — are averaged into the headline number, so it stays an average of comparable aggregates.
+YouGov/Economist is a **single pollster** and Strength In Numbers publishes **net approval only**; both are
+shown on the page and in `/api/state`, neither moves the headline. Freshness is per source (`maxAgeDays`),
+because a weekly tracker is not stale at eight days the way a daily average is. Adding another source means
+one registry entry plus one fetcher in `src/index.js`.
+
 ## Credits
 
 Portrait: Official White House portrait, June 2025 (photo: Daniel Torok) — public domain, 17 U.S.C. § 105.
-Odds: Kalshi, Polymarket · Approval: NYT polling average, Silver Bulletin · News: Google News, The Guardian, Politico, The Hill.
+Odds: Kalshi, Polymarket · News: Google News, The Guardian, Politico, The Hill.
+Approval: NYT polling average, Silver Bulletin, RealClearPolling, Decision Desk HQ, YouGov/Economist, and
+Strength In Numbers (net series, CC BY-NC 4.0 — attribution required, non-commercial use only).

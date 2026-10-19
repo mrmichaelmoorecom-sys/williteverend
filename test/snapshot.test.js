@@ -159,14 +159,48 @@ test('§1.8 overrides: config > KV > computed; NO override blocks the date rule'
 });
 
 test('§2 approval mean of NYT + Silver Bulletin → 38.2 / 59.1 / −20.9; stale source rejected', () => {
-  const a = computeApproval({ nyt: { approve: 37.8, disapprove: 59.3, date: '2026-09-22' }, sb: { approve: 38.59664, disapprove: 58.8613, date: '2026-09-21' }, now: NOW });
+  const a = computeApproval({ values: { nyt: { approve: 37.8, disapprove: 59.3, date: '2026-09-22' }, sb: { approve: 38.59664, disapprove: 58.8613, date: '2026-09-21' } }, now: NOW });
   assert.equal(a.approve, 38.2); assert.equal(a.disapprove, 59.1); assert.equal(a.net, -20.9);
-  assert.equal(a.partial, false);
-  const stale = computeApproval({ nyt: { approve: 37.8, disapprove: 59.3, date: '2026-09-22' }, sb: { approve: 50, disapprove: 40, date: '2026-09-01' }, now: NOW });
-  assert.equal(stale.approve, 37.8); assert.equal(stale.partial, true);
+  assert.equal(a.counted, 2); assert.equal(a.averaged, 4);   // the two aggregators with data, of four
+  const stale = computeApproval({ values: { nyt: { approve: 37.8, disapprove: 59.3, date: '2026-09-22' }, sb: { approve: 50, disapprove: 40, date: '2026-09-01' } }, now: NOW });
+  assert.equal(stale.approve, 37.8); assert.equal(stale.counted, 1); assert.equal(stale.partial, true);
   assert.equal(stale.sources.find((s) => s.key === 'sb').ok, false);
   const none = computeApproval({ now: NOW });
   assert.equal(none.approve, null); assert.equal(none.net, null);
+  assert.equal(none.counted, 0); assert.equal(none.partial, false);   // nothing at all is not "partial"
+});
+
+test('§2 only poll aggregators move the headline: a single pollster and a net-only series are shown, not averaged', () => {
+  const values = {
+    nyt: { approve: 37.8, disapprove: 59.3, date: '2026-09-22' },
+    sb: { approve: 38.59664, disapprove: 58.8613, date: '2026-09-21' },
+    rcp: { approve: 40.1, disapprove: 58.6, date: '2026-09-20' },
+    ddhq: { approve: 39, disapprove: 59.6, date: '2026-09-20' },
+    yougov: { approve: 38.7, disapprove: 57.9, date: '2026-09-14' },
+    sin: { net: -24.750367166666656, date: '2026-09-21' },
+  };
+  const a = computeApproval({ values, now: NOW });
+  // mean of the four aggregators only — YouGov's 38.7 and SIN's net are excluded from both figures
+  assert.equal(a.approve, 38.9); assert.equal(a.disapprove, 59.1); assert.equal(a.net, -20.2);
+  assert.equal(a.counted, 4); assert.equal(a.averaged, 4); assert.equal(a.partial, false);
+  const by = Object.fromEntries(a.sources.map((s) => [s.key, s]));
+  assert.equal(by.yougov.ok, true); assert.equal(by.yougov.kind, 'poll');
+  assert.equal(by.sin.ok, true); assert.equal(by.sin.kind, 'net');
+  assert.equal(by.sin.net, -24.8); assert.equal(by.sin.approve, null);   // net-only: no split to average
+  assert.equal(by.nyt.net, -21.5);                                       // split sources still get a net
+  // dropping the two non-averaged sources leaves the headline untouched
+  const { yougov, sin, ...aggsOnly } = values;
+  const b = computeApproval({ values: aggsOnly, now: NOW });
+  assert.equal(b.approve, a.approve); assert.equal(b.disapprove, a.disapprove); assert.equal(b.net, a.net);
+});
+
+test('§2 freshness is per source: YouGov is weekly, so its 7-day-old point still counts where a daily one would not', () => {
+  const date = '2026-09-14';   // 8 days before NOW — past the 7.5-day rule the dailies use
+  const a = computeApproval({ values: { nyt: { approve: 37.8, disapprove: 59.3, date }, yougov: { approve: 38.7, disapprove: 57.9, date } }, now: NOW });
+  const by = Object.fromEntries(a.sources.map((s) => [s.key, s]));
+  assert.equal(by.nyt.ok, false);      // daily source, stale
+  assert.equal(by.yougov.ok, true);    // weekly tracker, still current
+  assert.equal(a.approve, null);       // ...and it is not an aggregator, so the headline has nothing to average
 });
 
 test('buildGroups: rows carry label/pct/venue/link/thin; derived not-occur row; empty when no data', () => {

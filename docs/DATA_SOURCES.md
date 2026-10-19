@@ -175,6 +175,14 @@ Otherwise **NO**. Optional sub-line without flipping: if `P_EARLY >= 0.5` or any
 
 ## 2. APPROVAL
 
+> **Implemented (2026-10-19).** All six sources below are wired, in `src/lib/approval.js` (registry +
+> parsers) and `src/index.js` (fetchers). The "FALLBACK" numbering is historical — they are no longer
+> fallbacks. Only the four aggregators (NYT, SB, RCP, DDHQ) are averaged into the headline; YouGov is a
+> single pollster and SIN is net-only, so both are displayed but excluded from the mean. The two CSV
+> averages refresh together on the `approval` job; the four heavier sources rotate one per `approvalExtra`
+> run (~4 h each) to stay inside the 10 ms CPU budget — see README "CPU budget". Endpoints below were
+> curl-verified 2026-09-22; the parsers are unit-tested against fixtures of those shapes, not live.
+
 Cron every 30–60 min (both primaries update at most a few times/day). Headline `approve = round1(mean(nyt, sb))`, same for `disapprove`, `net = approve − disapprove`. Current: (37.8+38.59664)/2 = **38.2**, (59.3+58.8613)/2 = **59.1**, net **−20.9**. Show both source values + dates with links ("NYT polling average", "Silver Bulletin"). Reject a primary if non-200, parse error, or latest date > 7 days old.
 
 **PRIMARY A — NYT**
