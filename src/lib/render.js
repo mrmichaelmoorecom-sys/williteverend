@@ -131,11 +131,20 @@ ${renderEmbeds(snap)}
 export function renderApproval(snap) {
   const a = snap.approval;
   if (!a || a.approve == null) return `<p class="unavail">Approval unavailable.</p>`;
-  const srcs = (a.sources || []).map((s) => s.ok
-    ? `<li><a href="${h(s.link)}" target="_blank" rel="noopener">${h(s.name)}</a>: ${s.approve.toFixed(1)} / ${s.disapprove.toFixed(1)} <span class="tag">(${h(s.date)})</span></li>`
-    : `<li><a href="${h(s.link)}" target="_blank" rel="noopener">${h(s.name)}</a>: <span class="tag">unavailable</span></li>`).join('');
+  // Sources carried forward from a snapshot written before the registry existed have no `kind`; they were
+  // all aggregators, so treat a missing one as 'average'.
+  const srcs = (a.sources || []).map((s) => {
+    const name = s.link ? `<a href="${h(s.link)}" target="_blank" rel="noopener">${h(s.name)}</a>` : h(s.name);
+    if (!s.ok) return `<li>${name}: <span class="tag">unavailable</span></li>`;
+    const nums = (s.kind || 'average') === 'net' ? `net ${fmtSigned(s.net)}` : `${s.approve.toFixed(1)} / ${s.disapprove.toFixed(1)}`;
+    const tag = [s.date, s.note].filter(Boolean).map(h).join(' · ');
+    return `<li>${name}: ${nums}${tag ? ` <span class="tag">(${tag})</span>` : ''}</li>`;
+  }).join('');
+  const short = a.counted != null && a.averaged != null
+    ? a.counted < a.averaged && `Average of ${a.counted} of ${a.averaged} poll aggregators; the rest are stale or down.`
+    : a.partial && 'One source only — the other is stale or down.';   // pre-registry snapshot
   return `<dl class="approval"><div><dt>Approve</dt><dd>${a.approve.toFixed(1)}%</dd></div><div><dt>Disapprove</dt><dd>${a.disapprove.toFixed(1)}%</dd></div><div><dt>Net</dt><dd>${fmtSigned(a.net)}</dd></div></dl>
-<ul class="sources">${srcs}</ul>${a.partial ? '<p class="tag">One source only — the other is stale or down.</p>' : ''}`;
+<ul class="sources">${srcs}</ul>${short ? `<p class="tag">${h(short)}</p>` : ''}`;
 }
 
 export function renderNews(news, now = Date.now()) {

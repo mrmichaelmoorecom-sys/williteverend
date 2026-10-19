@@ -1,4 +1,5 @@
 // Snapshot math: headline formulas (§1.6, §1.7), verdict rule (§1.8), row grouping, approval mean (§2).
+import { APPROVAL_SOURCES, APPROVAL_KEYS, AVERAGED_KEYS } from './approval.js';
 
 export const TERM_END_DEFAULT = '2029-01-20T17:00:00Z';
 
@@ -126,17 +127,37 @@ export function computeVerdict({ now = Date.now(), termEnd = TERM_END_DEFAULT, o
 }
 
 /** §2 — mean of the two primaries; reject a primary older than 7 days. */
-export function computeApproval({ nyt = null, sb = null, now = Date.now() } = {}) {
-  const fresh = (s) => s && Number.isFinite(s.approve) && Number.isFinite(s.disapprove) && s.date && now - Date.parse(s.date) <= 7 * 86400e3 + 12 * 3600e3;
-  const sources = [
-    { key: 'nyt', name: 'NYT polling average', link: 'https://www.nytimes.com/interactive/polls/donald-trump-approval-rating-polls.html', ...(nyt || {}), ok: fresh(nyt) },
-    { key: 'sb', name: 'Silver Bulletin', link: 'https://www.natesilver.net/p/trump-approval-ratings-nate-silver-bulletin', ...(sb || {}), ok: fresh(sb) },
-  ];
-  const use = sources.filter((s) => s.ok);
-  const approve = use.length ? Math.round(mean(use.map((s) => s.approve)) * 10) / 10 : null;
-  const disapprove = use.length ? Math.round(mean(use.map((s) => s.disapprove)) * 10) / 10 : null;
-  const net = approve != null ? Math.round((approve - disapprove) * 10) / 10 : null;
-  return { approve, disapprove, net, sources, partial: use.length === 1 };
+/** Round a percentage to one decimal. Not r1 above, which also scales a probability to a percentage. */
+const round1 = (n) => Math.round(n * 10) / 10;
+/**
+ * Merge the approval sources into one number. `values` is keyed by source key (see APPROVAL_SOURCES);
+ * a key that is absent or stale is simply not counted, so a source going down never blanks the section.
+ *
+ * Only `kind: 'average'` sources — the poll aggregators, which all publish an approve/disapprove split —
+ * are averaged. A single pollster would otherwise carry the same weight as an aggregate of every house,
+ * and a net-only series has no split to average at all; both are still returned in `sources` so the page
+ * can show them. Freshness is per source (`maxAgeDays`) because the cadences differ: the dailies keep the
+ * original 7.5-day rule, RCP's dated poll window trails publication, and YouGov is a weekly tracker.
+ */
+export function computeApproval({ values = {}, now = Date.now() } = {}) {
+  const sources = APPROVAL_SOURCES.map((def) => {
+    const v = values[def.key] || null;
+    const approve = v && Number.isFinite(v.approve) ? v.approve : null;
+    const disapprove = v && Number.isFinite(v.disapprove) ? v.disapprove : null;
+    const net = approve != null && disapprove != null ? round1(approve - disapprove)
+      : v && Number.isFinite(v.net) ? round1(v.net) : null;
+    const date = (v && v.date) || null;
+    const hasNumbers = def.kind === 'net' ? net != null : approve != null && disapprove != null;
+    const age = date ? now - Date.parse(date) : Infinity;
+    return { key: def.key, name: def.name, kind: def.kind, link: def.link || null, note: def.note || null,
+      approve, disapprove, net, date, ok: !!(hasNumbers && Number.isFinite(age) && age <= def.maxAgeDays * 86400e3) };
+  });
+  const use = sources.filter((s) => s.ok && s.kind === 'average');
+  const approve = use.length ? round1(mean(use.map((s) => s.approve))) : null;
+  const disapprove = use.length ? round1(mean(use.map((s) => s.disapprove))) : null;
+  const net = approve != null ? round1(approve - disapprove) : null;
+  return { approve, disapprove, net, sources, counted: use.length, averaged: AVERAGED_KEYS.length,
+    partial: use.length > 0 && use.length < AVERAGED_KEYS.length };
 }
 
 const pctOf = (p) => (p == null ? null : Math.round(p * 1000) / 10);
@@ -294,8 +315,7 @@ export function buildSnapshot({
     sources: {
       kalshi: venueFlag(kalshi),
       polymarket: venueFlag(polymarket),
-      nyt: sourceFlag((approval || (prev && prev.approval) || {}).sources, 'nyt'),
-      sb: sourceFlag((approval || (prev && prev.approval) || {}).sources, 'sb'),
+      ...Object.fromEntries(APPROVAL_KEYS.map((k) => [k, sourceFlag((approval || (prev && prev.approval) || {}).sources, k)])),
       news: newsMeta || (prev && prev.sources && prev.sources.news) || { ok: false, at: null },
     },
     config: {

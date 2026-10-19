@@ -1,17 +1,25 @@
 // Cron scheduling: every tick refreshes the markets (cheap); at most ONE heavy job runs per invocation so a
 // single run stays inside the Workers Free plan's 10 ms CPU budget (per HTTP request AND per cron invocation).
-// Jobs: approval (NYT + Silver Bulletin CSVs), election2028 (the 445 KB Polymarket event + Kalshi list +
-// monthly-market discovery), news (four RSS feeds). Progress persists after every job, so a fresh deploy
-// converges within ~3 ticks of the */10 trigger.
+// Jobs: approval (NYT + Silver Bulletin CSVs), approvalExtra (ONE of the heavier approval sources per run,
+// rotated), election2028 (the 445 KB Polymarket event + Kalshi list + monthly-market discovery), news (four
+// RSS feeds). Progress persists after every job, so a fresh deploy converges within ~3 ticks of the */10
+// trigger.
+//
+// approvalExtra exists only to protect that CPU budget. RCP's page alone is 5.7 MB, which costs ~1.6 ms just
+// to decode, and a tick already spends 6-8 ms on the light refresh; fetching every approval source together
+// would push a single invocation past 10 ms, and error 1102 writes nothing at all. One extra per run keeps
+// the worst tick the same shape as before, and with four extras on an hourly rotation each is refreshed
+// about every four hours — immaterial for series that move daily at most.
 
-export const JOBS = ['approval', 'election2028', 'news'];
-export const STALE_HOURLY_MS = 55 * 60e3;   // approval + election2028 are "hourly"
+export const JOBS = ['approval', 'approvalExtra', 'election2028', 'news'];
+export const STALE_HOURLY_MS = 55 * 60e3;   // approval, approvalExtra + election2028 are "hourly"
 export const STALE_NEWS_MS = 10 * 60e3;     // news every tick when nothing hourly is due
 
 const age = (iso, now) => { const t = iso ? Date.parse(iso) : NaN; return Number.isFinite(t) ? now - t : Infinity; };
 
 /**
- * Pick the one heavy job that is due, in priority order approval → election2028 → news, or null.
+ * Pick the one heavy job that is due, in priority order approval → approvalExtra → election2028 → news,
+ * or null.
  * `prev.jobs[job]` is the last ATTEMPT time (so a failing job cannot starve the others); older
  * snapshots without `jobs` fall back to the data timestamps.
  */
@@ -20,10 +28,12 @@ export function pickJob(prev, now = Date.now()) {
   const jobs = prev.jobs || {};
   const lastAt = {
     approval: jobs.approval || (prev.approval && prev.approval.updatedAt) || null,
+    approvalExtra: jobs.approvalExtra || null,
     election2028: jobs.election2028 || (prev.election2028 && prev.election2028.at) || null,
     news: jobs.news || (prev.sources && prev.sources.news && prev.sources.news.at) || null,
   };
   if (age(lastAt.approval, now) > STALE_HOURLY_MS) return 'approval';
+  if (age(lastAt.approvalExtra, now) > STALE_HOURLY_MS) return 'approvalExtra';
   if (age(lastAt.election2028, now) > STALE_HOURLY_MS) return 'election2028';
   if (age(lastAt.news, now) > STALE_NEWS_MS) return 'news';
   return null;
